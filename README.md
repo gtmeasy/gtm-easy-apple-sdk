@@ -45,9 +45,7 @@ import GTMEasyGrowth
 let analytics = GrowthAnalytics(
   configuration: .init(
     app: "<gtm-easy-app-id>",
-    endpoint: URL(string: "https://www.gtmeasy.com")!,
-    writeKey: "<per-app-write-key>",
-    environment: .production
+    writeKey: "<per-app-write-key>"
   )
 )
 
@@ -56,13 +54,14 @@ try await analytics.trackFirstOpen()
 try await analytics.trackPurchaseCompleted(amount: 9.99, currency: "USD", productId: "pro_monthly")
 ```
 
-Use `.development` or `.staging` while testing:
+`endpoint` defaults to `https://www.gtmeasy.com`. Override it only when running
+against a self-hosted GTM Easy deployment or a local development server:
 
 ```swift
 let configuration = GrowthAnalyticsConfiguration(
   app: "<gtm-easy-app-id>",
-  endpoint: URL(string: "https://www.gtmeasy.com")!,
   writeKey: "<per-app-write-key>",
+  endpoint: URL(string: "https://your-self-hosted.example.com")!,
   environment: .development
 )
 ```

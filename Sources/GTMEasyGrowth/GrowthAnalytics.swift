@@ -11,6 +11,10 @@ public struct GrowthAnalyticsConfiguration {
     case development
   }
 
+  /// Production ingest host. Override `endpoint` only when running against a
+  /// self-hosted GTM Easy deployment or a local development server.
+  public static let defaultEndpoint = URL(string: "https://www.gtmeasy.com")!
+
   public let app: String
   public let endpoint: URL
   public let writeKey: String
@@ -19,8 +23,8 @@ public struct GrowthAnalyticsConfiguration {
 
   public init(
     app: String,
-    endpoint: URL,
     writeKey: String,
+    endpoint: URL = GrowthAnalyticsConfiguration.defaultEndpoint,
     environment: Environment = .production,
     userDefaults: UserDefaults = .standard
   ) {
@@ -29,6 +33,20 @@ public struct GrowthAnalyticsConfiguration {
     self.writeKey = writeKey
     self.environment = environment
     self.userDefaults = userDefaults
+  }
+
+  /// Source-compatible initializer for pre-default-endpoint call sites that
+  /// passed `endpoint` before `writeKey`. New code should use the primary
+  /// initializer and omit `endpoint` to pick up the production default.
+  @available(*, deprecated, message: "Use init(app:writeKey:endpoint:environment:userDefaults:) — endpoint defaults to https://www.gtmeasy.com")
+  public init(
+    app: String,
+    endpoint: URL,
+    writeKey: String,
+    environment: Environment = .production,
+    userDefaults: UserDefaults = .standard
+  ) {
+    self.init(app: app, writeKey: writeKey, endpoint: endpoint, environment: environment, userDefaults: userDefaults)
   }
 }
 

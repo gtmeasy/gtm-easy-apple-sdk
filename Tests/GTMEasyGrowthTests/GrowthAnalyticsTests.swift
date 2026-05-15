@@ -40,6 +40,12 @@ final class GrowthAnalyticsTests: XCTestCase {
     XCTAssertEqual((json?["traits"] as? [String: Any])?["plan"] as? String, "pro")
   }
 
+  func testConfigurationDefaultsToProductionEndpoint() {
+    let config = GrowthAnalyticsConfiguration(app: "milelog", writeKey: "test-write-key")
+    XCTAssertEqual(config.endpoint.absoluteString, "https://www.gtmeasy.com")
+    XCTAssertEqual(config.environment, .production)
+  }
+
   func testRejectedResponseThrows() async {
     let session = MockSession(statusCode: 401, response: #"{"error":"bad key"}"#)
     let analytics = GrowthAnalytics(configuration: configuration(), session: session)
@@ -57,8 +63,8 @@ final class GrowthAnalyticsTests: XCTestCase {
   private func configuration() -> GrowthAnalyticsConfiguration {
     GrowthAnalyticsConfiguration(
       app: "milelog",
-      endpoint: URL(string: "https://gtmeasy.test")!,
       writeKey: "test-write-key",
+      endpoint: URL(string: "https://gtmeasy.test")!,
       environment: .development,
       userDefaults: UserDefaults(suiteName: "GTMEasyGrowthTests-\(UUID().uuidString)")!
     )
