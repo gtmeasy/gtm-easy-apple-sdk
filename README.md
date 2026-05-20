@@ -1,8 +1,18 @@
 # GTM Easy Apple SDK
 
-First-party Swift Package Manager SDK for GTM Easy growth analytics and native attribution.
+First-party Swift Package Manager SDK for GTM Easy growth analytics, native attribution, and ad-platform conversion APIs.
 
-The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, and can collect Apple Search Ads attribution tokens on iOS.
+The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures device identifiers (IDFA/IDFV + ATT status), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution.
+
+## What's new (v0.2.0)
+
+- **Auto-instrumentation**: `GrowthAutoInstrument` fires `app.first_open` (once per install) + `app.opened` on every foreground.
+- **Device identifiers**: `GrowthDeviceIdentifiers.shared` reads IDFA/IDFV/ATT status; `requestTrackingAuthorization()` prompts ATT.
+- **Click ID store**: `GrowthClickIdStore` persists every supported ad-platform click id with 90-day TTL, synthesizes Meta `_fbc`/`_fbp`. `analytics.captureClickIds(from: deepLinkURL)` walks query params.
+- **Typed paywall events**: `analytics.trackPaywallOpened(placement:variant:productIds:)` and 7 more helpers.
+- **SKAdNetwork 4.0**: `GrowthSKAN.shared.registerForAttribution()` + `updateConversion(funnel:revenue:engagementBit:lockWindow:)` with Adjust-style CV encoding.
+- **Debug mirror**: `GrowthAnalyticsConfiguration(debug: true)` mirrors every event to `GrowthDebugSink` + posts a `NotificationCenter` notification per event.
+- **Generated low-level client**: `GTMEasyGrowthAPI` target — typed URLSession client auto-generated from the OpenAPI spec; the high-level `GrowthAnalytics` actor wraps it.
 
 ## Installation
 
