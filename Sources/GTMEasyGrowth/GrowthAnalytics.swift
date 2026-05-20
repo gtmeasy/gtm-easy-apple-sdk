@@ -55,17 +55,17 @@ public struct GrowthAnalyticsConfiguration {
   }
 }
 
-public struct GrowthIngestResponse: Decodable {
+public struct GrowthIngestResponse: Decodable, Sendable {
   public let event: GrowthEventRecord?
   public let warnings: [String]?
 }
 
-public struct GrowthEventRecord: Decodable {
+public struct GrowthEventRecord: Decodable, Sendable {
   public let id: String
   public let eventName: String
 }
 
-public struct GrowthAttributionResponse: Decodable {
+public struct GrowthAttributionResponse: Decodable, Sendable {
   public let event: GrowthEventRecord?
   public let attribution: [String: GrowthJSONValue]?
 }
