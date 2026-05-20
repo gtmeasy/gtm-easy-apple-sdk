@@ -27,17 +27,9 @@ public struct ContentView: View {
       DebugConsoleView()
         .tabItem { Label("Console", systemImage: "text.viewfinder") }
     }
-    .task {
-      // First-open is idempotent — the SDK persists a flag so duplicate
-      // launches don't fan out two `app.first_open` events.
-      do {
-        _ = try await GrowthClient.analytics.trackFirstOpen()
-        _ = try await GrowthClient.analytics.trackAppOpen()
-      } catch {
-        // Surface to the console tab via the debug sink; production code
-        // would route to Sentry / Crashlytics here.
-        print("[TwilarSample] first_open / app_open failed: \(error)")
-      }
-    }
+    // Cold-launch tracking is owned by TwilarSampleApp.launchSequence so
+    // that ATT consent + auto-instrumentation run in a fixed order. Calling
+    // trackFirstOpen/trackAppOpen here as well would race ATT and double-fire
+    // app.opened on every view appear.
   }
 }

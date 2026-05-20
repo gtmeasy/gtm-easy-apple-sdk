@@ -4,7 +4,10 @@ import PackageDescription
 
 let package = Package(
     name: "TwilarSampleFeature",
-    platforms: [.iOS(.v16), .macOS(.v12)],
+    // iOS-only: the feature module uses NavigationStack + iOS-only modifiers
+    // (textInputAutocapitalization, .topBarTrailing, etc.) so we drop macOS
+    // support rather than littering #if os(iOS) across every view.
+    platforms: [.iOS(.v16)],
     products: [
         .library(
             name: "TwilarSampleFeature",

@@ -7,7 +7,6 @@ import AppTrackingTransparency
 
 @main
 struct TwilarSampleApp: App {
-  // Register SKAdNetwork as early as possible. The actor is process-shared.
   init() {
     if #available(iOS 14.0, *) {
       Task { await GrowthSKAN.shared.registerForAttribution() }
@@ -17,18 +16,27 @@ struct TwilarSampleApp: App {
   var body: some Scene {
     WindowGroup {
       ContentView()
-        .task {
-          // Ask for App Tracking Transparency on first launch. Production apps
-          // should defer this until they have UI context for the user, but
-          // the sample is opinionated about showing the full flow.
-          await requestATTIfNeeded()
-        }
+        .task { await launchSequence() }
         .onOpenURL { url in
           // Persist any click ids from inbound deep links + universal links.
           // Real apps would also route to the appropriate screen here.
           Task { _ = await GrowthClient.analytics.captureClickIds(from: url) }
         }
     }
+  }
+
+  /// Run the entire cold-launch sequence in a fixed order so the first
+  /// outbound event is properly enriched:
+  ///   1. ATT prompt (so IDFA is present in `_ctx` if the user consents)
+  ///   2. GrowthAutoInstrument.start() — fires `app.first_open` only once
+  ///      per install (UserDefaults-guarded) and `app.opened` on this launch
+  ///
+  /// Running these in parallel races: launch events would ship without
+  /// IDFA, defeating the point of having ATT in a sample.
+  @MainActor
+  private func launchSequence() async {
+    await requestATTIfNeeded()
+    await GrowthClient.autoInstrument.start()
   }
 
   @MainActor

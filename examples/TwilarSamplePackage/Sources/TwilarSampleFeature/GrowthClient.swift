@@ -22,10 +22,12 @@ public enum GrowthClient {
   /// running the sample against production.
   public static let writeKey = "wk_sample_replace_me"
 
-  /// LAN staging in `apps/web/docker-compose.staging.yml`. The simulator
-  /// can reach the host machine via its LAN IP; localhost would loop back
-  /// to the simulator itself.
-  public static let endpoint = URL(string: "http://192.168.3.241:3000")!
+  /// Production by default — HTTPS so iOS ATS doesn't block the request.
+  /// Point at `http://192.168.3.241:3000` (the LAN staging host in
+  /// `apps/web/docker-compose.staging.yml`) AND add an
+  /// `NSAppTransportSecurity → NSExceptionDomains` entry if you want to
+  /// dogfood against staging instead.
+  public static let endpoint = URL(string: "https://www.gtmeasy.com")!
 
   public static let analytics: GrowthAnalytics = {
     let config = GrowthAnalyticsConfiguration(
@@ -36,6 +38,14 @@ public enum GrowthClient {
       debug: true
     )
     return GrowthAnalytics(configuration: config)
+  }()
+
+  /// Auto-instrumentation handle. `start()` is the right entry-point for
+  /// lifecycle events — it dedupes `app.first_open` via UserDefaults and
+  /// emits `app.opened` exactly once on each cold start, so callers shouldn't
+  /// fire those events manually.
+  public static let autoInstrument: GrowthAutoInstrument = {
+    GrowthAutoInstrument(analytics: analytics)
   }()
 
   /// SKAdNetwork helper — the SDK ships a process-shared actor for this.
