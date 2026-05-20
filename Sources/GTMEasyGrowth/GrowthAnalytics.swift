@@ -20,19 +20,24 @@ public struct GrowthAnalyticsConfiguration {
   public let writeKey: String
   public let environment: Environment
   public let userDefaults: UserDefaults
+  /// When true, every identify/track is mirrored to `GrowthDebugSink.shared`
+  /// before the network call and emitted on `GrowthDebugSink.notificationName`.
+  public let debug: Bool
 
   public init(
     app: String,
     writeKey: String,
     endpoint: URL = GrowthAnalyticsConfiguration.defaultEndpoint,
     environment: Environment = .production,
-    userDefaults: UserDefaults = .standard
+    userDefaults: UserDefaults = .standard,
+    debug: Bool = false
   ) {
     self.app = app
     self.endpoint = endpoint
     self.writeKey = writeKey
     self.environment = environment
     self.userDefaults = userDefaults
+    self.debug = debug
   }
 
   /// Source-compatible initializer for pre-default-endpoint call sites that
@@ -74,13 +79,75 @@ extension URLSession: GrowthHTTPSession {}
 public actor GrowthAnalytics {
   private let configuration: GrowthAnalyticsConfiguration
   private let session: GrowthHTTPSession
+  private let deviceIdentifiers: GrowthDeviceIdentifiers
+  private let clickIdStore: GrowthClickIdStore
   private var userId: String?
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
 
-  public init(configuration: GrowthAnalyticsConfiguration, session: GrowthHTTPSession = URLSession.shared) {
+  public init(
+    configuration: GrowthAnalyticsConfiguration,
+    session: GrowthHTTPSession = URLSession.shared,
+    deviceIdentifiers: GrowthDeviceIdentifiers = .shared,
+    clickIdStore: GrowthClickIdStore? = nil
+  ) {
     self.configuration = configuration
     self.session = session
+    self.deviceIdentifiers = deviceIdentifiers
+    self.clickIdStore = clickIdStore ?? GrowthClickIdStore(defaults: configuration.userDefaults)
+  }
+
+  /// Set the authenticated userId without emitting an identify event. Useful
+  /// for app launches where the user is already signed in.
+  public func setUserId(_ id: String?) {
+    self.userId = id
+  }
+
+  public func getUserId() -> String? { userId }
+
+  public func getAnonymousId() -> String { anonymousId() }
+
+  /// Record a click id captured from a deep link or universal link. The
+  /// store dedupes + persists; subsequent events automatically pick it up.
+  public func recordClickId(_ provider: GrowthClickProvider, value: String) async {
+    await clickIdStore.record(provider, value: value)
+  }
+
+  /// Convenience: extract `fbclid` / `gclid` / `ttclid` / `wbraid` / `gbraid` /
+  /// `msclkid` / `twclid` / `igshid` from a URL's query string and persist
+  /// them. Returns the count of click ids recorded.
+  @discardableResult
+  public func captureClickIds(from url: URL) async -> Int {
+    guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let items = components.queryItems else { return 0 }
+    var count = 0
+    let now = Date()
+    for item in items {
+      guard let value = item.value, !value.isEmpty else { continue }
+      switch item.name.lowercased() {
+      case "fbclid":
+        await clickIdStore.record(.fbclid, value: value, at: now)
+        _ = await clickIdStore.ensureFbc(from: value, at: now)
+        count += 1
+      case "gclid":
+        await clickIdStore.record(.gclid, value: value, at: now); count += 1
+      case "wbraid":
+        await clickIdStore.record(.wbraid, value: value, at: now); count += 1
+      case "gbraid":
+        await clickIdStore.record(.gbraid, value: value, at: now); count += 1
+      case "ttclid":
+        await clickIdStore.record(.ttclid, value: value, at: now); count += 1
+      case "igshid":
+        await clickIdStore.record(.igshid, value: value, at: now); count += 1
+      case "msclkid":
+        await clickIdStore.record(.msclkid, value: value, at: now); count += 1
+      case "twclid":
+        await clickIdStore.record(.twclid, value: value, at: now); count += 1
+      default:
+        break
+      }
+    }
+    return count
   }
 
   @discardableResult
@@ -91,6 +158,9 @@ public actor GrowthAnalytics {
     if let userId {
       self.userId = userId
     }
+
+    var enrichedTraits = traits
+    enrichedTraits["_ctx"] = .object(await commonContext())
 
     let body = IdentifyBody(
       app: configuration.app,
@@ -104,8 +174,11 @@ public actor GrowthAnalytics {
       country: nil,
       locale: Locale.current.identifier,
       timezone: TimeZone.current.identifier,
-      traits: traits
+      traits: enrichedTraits
     )
+    if configuration.debug {
+      await GrowthDebugSink.shared.record(.init(kind: .identify, label: self.userId ?? "<anonymous>", properties: enrichedTraits))
+    }
     return try await post(body, path: "/api/v1/growth/users")
   }
 
@@ -116,6 +189,9 @@ public actor GrowthAnalytics {
     metricValue: Double? = nil,
     metricLabel: String? = nil
   ) async throws -> GrowthIngestResponse {
+    var enrichedProperties = properties
+    enrichedProperties["_ctx"] = .object(await commonContext())
+
     let body = EventBody(
       app: configuration.app,
       environment: configuration.environment.rawValue,
@@ -133,12 +209,31 @@ public actor GrowthAnalytics {
       attributionProvider: nil,
       attributionId: nil,
       occurredAt: iso8601Now(),
-      properties: properties,
+      properties: enrichedProperties,
       metricValue: metricValue,
       metricLabel: metricLabel
     )
+    if configuration.debug {
+      await GrowthDebugSink.shared.record(.init(kind: .track, label: eventName, properties: enrichedProperties))
+    }
     return try await post(body, path: "/api/v1/growth/events")
   }
+
+  /// Common context attached to every event under `properties._ctx`. Includes
+  /// device identifiers (IDFA/IDFV/ATT status) + click ids (fbc/fbp/gclid/
+  /// ttclid/etc) so server-side CAPI forwarders can dedupe + match.
+  private func commonContext() async -> [String: GrowthJSONValue] {
+    var ctx: [String: GrowthJSONValue] = [:]
+    let device = await deviceIdentifiers.snapshot()
+    for (k, v) in device.asProperties { ctx[k] = v }
+    let clicks = await clickIdStore.snapshot()
+    for (k, v) in clicks { ctx[k] = v }
+    ctx["sdk"] = .string("gtm-easy-swift")
+    ctx["sdk_version"] = .string(GrowthAnalytics.sdkVersion)
+    return ctx
+  }
+
+  public static let sdkVersion = "0.2.0"
 
   @discardableResult
   public func trackFirstOpen() async throws -> GrowthIngestResponse {
