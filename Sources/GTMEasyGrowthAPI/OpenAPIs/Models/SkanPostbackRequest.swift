@@ -27,13 +27,14 @@ public struct SkanPostbackRequest: Codable, JSONEncodable, Hashable {
     public private(set) var attributionSignature: String
     public private(set) var redownload: Bool?
     public private(set) var sourceAppId: Int?
+    public private(set) var sourceDomain: String?
     public private(set) var fidelityType: Int?
     public private(set) var conversionValue: Int?
     public private(set) var coarseConversionValue: CoarseConversionValue?
     public private(set) var didWin: Bool?
     public private(set) var postbackSequenceIndex: Int?
 
-    public init(version: String, adNetworkId: String, campaignId: Int? = nil, sourceIdentifier: String? = nil, transactionId: String, appId: Int, attributionSignature: String, redownload: Bool? = nil, sourceAppId: Int? = nil, fidelityType: Int? = nil, conversionValue: Int? = nil, coarseConversionValue: CoarseConversionValue? = nil, didWin: Bool? = nil, postbackSequenceIndex: Int? = nil) {
+    public init(version: String, adNetworkId: String, campaignId: Int? = nil, sourceIdentifier: String? = nil, transactionId: String, appId: Int, attributionSignature: String, redownload: Bool? = nil, sourceAppId: Int? = nil, sourceDomain: String? = nil, fidelityType: Int? = nil, conversionValue: Int? = nil, coarseConversionValue: CoarseConversionValue? = nil, didWin: Bool? = nil, postbackSequenceIndex: Int? = nil) {
         self.version = version
         self.adNetworkId = adNetworkId
         self.campaignId = campaignId
@@ -43,6 +44,7 @@ public struct SkanPostbackRequest: Codable, JSONEncodable, Hashable {
         self.attributionSignature = attributionSignature
         self.redownload = redownload
         self.sourceAppId = sourceAppId
+        self.sourceDomain = sourceDomain
         self.fidelityType = fidelityType
         self.conversionValue = conversionValue
         self.coarseConversionValue = coarseConversionValue
@@ -60,6 +62,7 @@ public struct SkanPostbackRequest: Codable, JSONEncodable, Hashable {
         case attributionSignature = "attribution-signature"
         case redownload
         case sourceAppId = "source-app-id"
+        case sourceDomain = "source-domain"
         case fidelityType = "fidelity-type"
         case conversionValue = "conversion-value"
         case coarseConversionValue = "coarse-conversion-value"
@@ -95,6 +98,7 @@ public struct SkanPostbackRequest: Codable, JSONEncodable, Hashable {
         try container.encode(attributionSignature, forKey: .attributionSignature)
         try container.encodeIfPresent(redownload, forKey: .redownload)
         try container.encodeIfPresent(sourceAppId, forKey: .sourceAppId)
+        try container.encodeIfPresent(sourceDomain, forKey: .sourceDomain)
         try container.encodeIfPresent(fidelityType, forKey: .fidelityType)
         try container.encodeIfPresent(conversionValue, forKey: .conversionValue)
         try container.encodeIfPresent(coarseConversionValue, forKey: .coarseConversionValue)
@@ -118,6 +122,7 @@ public struct SkanPostbackRequest: Codable, JSONEncodable, Hashable {
         attributionSignature = try container.decode(String.self, forKey: .attributionSignature)
         redownload = try container.decodeIfPresent(Bool.self, forKey: .redownload)
         sourceAppId = try container.decodeIfPresent(Int.self, forKey: .sourceAppId)
+        sourceDomain = try container.decodeIfPresent(String.self, forKey: .sourceDomain)
         fidelityType = try container.decodeIfPresent(Int.self, forKey: .fidelityType)
         conversionValue = try container.decodeIfPresent(Int.self, forKey: .conversionValue)
         coarseConversionValue = try container.decodeIfPresent(CoarseConversionValue.self, forKey: .coarseConversionValue)
@@ -133,6 +138,7 @@ public struct SkanPostbackRequest: Codable, JSONEncodable, Hashable {
         nonAdditionalPropertyKeys.insert("attribution-signature")
         nonAdditionalPropertyKeys.insert("redownload")
         nonAdditionalPropertyKeys.insert("source-app-id")
+        nonAdditionalPropertyKeys.insert("source-domain")
         nonAdditionalPropertyKeys.insert("fidelity-type")
         nonAdditionalPropertyKeys.insert("conversion-value")
         nonAdditionalPropertyKeys.insert("coarse-conversion-value")
