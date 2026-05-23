@@ -4,6 +4,12 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures device identifiers (IDFA/IDFV + ATT status), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution.
 
+## What's new (v0.3.0)
+
+- **First-class identity**: `identify(userId:username:email:traits:)` accepts optional `username` and `email` as top-level fields, persisted and reused on every later `track`.
+- **Logout-safe reset**: identity lives inside the `GrowthAnalytics` actor and is hydrated in its initializer, so `track`/`identify` snapshot a consistent `(userId, anonymousId)` with no `await` boundary. `reset()` rotates the anon id and clears identity atomically.
+- **Identity-aware bridges**: Clarity / PostHog / Sentry / Statsig propagate `username`/`email` and clear on logout.
+
 ## What's new (v0.2.0)
 
 - **Auto-instrumentation**: `GrowthAutoInstrument` fires `app.first_open` (once per install) + `app.opened` on every foreground.
