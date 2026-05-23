@@ -40,6 +40,54 @@ final class GrowthAnalyticsTests: XCTestCase {
     XCTAssertEqual((json?["traits"] as? [String: Any])?["plan"] as? String, "pro")
   }
 
+  func testIdentifyPostsUsernameAndEmail() async throws {
+    let session = MockSession(response: #"{"event":null,"warnings":[]}"#)
+    let analytics = GrowthAnalytics(configuration: configuration(), session: session)
+
+    _ = try await analytics.identify(userId: "user_123", username: "john_wayne", email: "  John@Example.com ")
+
+    let captured = await session.firstRequest()
+    let request = try XCTUnwrap(captured)
+    let body = try XCTUnwrap(request.httpBody)
+    let json = try JSONSerialization.jsonObject(with: body) as? [String: Any]
+    XCTAssertEqual(json?["username"] as? String, "john_wayne")
+    // Client trims; the server lowercases. We keep the trimmed plaintext here.
+    XCTAssertEqual(json?["email"] as? String, "John@Example.com")
+  }
+
+  func testIdentityPersistsAcrossInstances() async throws {
+    let defaults = UserDefaults(suiteName: "GTMEasyGrowthTests-persist-\(UUID().uuidString)")!
+    let config = GrowthAnalyticsConfiguration(
+      app: "milelog", writeKey: "test-write-key",
+      endpoint: URL(string: "https://gtmeasy.test")!, environment: .development, userDefaults: defaults
+    )
+    let first = GrowthAnalytics(configuration: config, session: MockSession(response: #"{"event":null,"warnings":[]}"#))
+    _ = try await first.identify(userId: "user_123", username: "jw", email: "jw@example.com")
+
+    // Simulate an app relaunch: fresh instance, same durable UserDefaults.
+    let session = MockSession(response: #"{"event":null,"warnings":[]}"#)
+    let second = GrowthAnalytics(configuration: config, session: session)
+    let restored = await second.getUserId()
+    XCTAssertEqual(restored, "user_123")
+    _ = try await second.track("paywall.opened")
+    let captured = await session.firstRequest()
+    let request = try XCTUnwrap(captured)
+    let httpBody = try XCTUnwrap(request.httpBody)
+    let json = try JSONSerialization.jsonObject(with: httpBody) as? [String: Any]
+    XCTAssertEqual(json?["userId"] as? String, "user_123")
+  }
+
+  func testResetClearsIdentityAndRotatesAnonymousId() async throws {
+    let analytics = GrowthAnalytics(configuration: configuration(), session: MockSession(response: #"{"event":null,"warnings":[]}"#))
+    _ = try await analytics.identify(userId: "user_123", email: "u@example.com")
+    let before = await analytics.getAnonymousId()
+    await analytics.reset()
+    let clearedUser = await analytics.getUserId()
+    XCTAssertNil(clearedUser)
+    let after = await analytics.getAnonymousId()
+    XCTAssertNotEqual(before, after)
+  }
+
   func testConfigurationDefaultsToProductionEndpoint() {
     let config = GrowthAnalyticsConfiguration(app: "milelog", writeKey: "test-write-key")
     XCTAssertEqual(config.endpoint.absoluteString, "https://www.gtmeasy.com")

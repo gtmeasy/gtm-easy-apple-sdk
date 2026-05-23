@@ -90,9 +90,15 @@ The store auto-synthesizes Meta `_fbc` / `_fbp` and persists each click ID for 9
 ## 5. Identify + track
 
 ```swift
-try await GrowthClient.analytics.identify(userId: "user_123", traits: ["plan": .string("pro"), "email": .string("u@x.com")])
+// username + email are first-class params — not smuggled in traits.
+try await GrowthClient.analytics.identify(userId: "user_123", username: "john_wayne", email: "u@x.com", traits: ["plan": .string("pro")])
 try await GrowthClient.analytics.track("feature.used", properties: ["feature": .string("export")])
+
+// On logout: forget the identity and rotate the anonymous id.
+await GrowthClient.analytics.reset()
 ```
+
+`username` + `email` persist in `UserDefaults` and reattach to every later `track`.
 
 Email/phone in traits are SHA-256 hashed server-side for Enhanced Matching — never hash on the client.
 

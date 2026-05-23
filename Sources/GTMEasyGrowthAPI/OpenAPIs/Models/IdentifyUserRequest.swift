@@ -25,6 +25,8 @@ public struct IdentifyUserRequest: Codable, JSONEncodable, Hashable {
         case server = "server"
     }
     public static let appRule = StringRule(minLength: 1, maxLength: 64, pattern: nil)
+    public static let usernameRule = StringRule(minLength: nil, maxLength: 240, pattern: nil)
+    public static let emailRule = StringRule(minLength: nil, maxLength: 320, pattern: nil)
     public private(set) var app: String
     public private(set) var environment: Environment? = .production
     /** Originating platform. */
@@ -32,6 +34,10 @@ public struct IdentifyUserRequest: Codable, JSONEncodable, Hashable {
     public private(set) var userId: String?
     public private(set) var anonymousId: String?
     public private(set) var deviceId: String?
+    /** Human-readable display name / handle. Plaintext at rest. */
+    public private(set) var username: String?
+    /** User email. Plaintext at rest; SHA-256 hashed only at ad-platform egress. */
+    public private(set) var email: String?
     public private(set) var appVersion: String?
     public private(set) var buildNumber: String?
     public private(set) var country: String?
@@ -40,13 +46,15 @@ public struct IdentifyUserRequest: Codable, JSONEncodable, Hashable {
     /** Free-form structured properties. Reserved keys: `_ctx` for SDK common context. */
     public private(set) var traits: [String: AnyCodable]?
 
-    public init(app: String, environment: Environment? = .production, platform: Platform? = .ios, userId: String? = nil, anonymousId: String? = nil, deviceId: String? = nil, appVersion: String? = nil, buildNumber: String? = nil, country: String? = nil, locale: String? = nil, timezone: String? = nil, traits: [String: AnyCodable]? = nil) {
+    public init(app: String, environment: Environment? = .production, platform: Platform? = .ios, userId: String? = nil, anonymousId: String? = nil, deviceId: String? = nil, username: String? = nil, email: String? = nil, appVersion: String? = nil, buildNumber: String? = nil, country: String? = nil, locale: String? = nil, timezone: String? = nil, traits: [String: AnyCodable]? = nil) {
         self.app = app
         self.environment = environment
         self.platform = platform
         self.userId = userId
         self.anonymousId = anonymousId
         self.deviceId = deviceId
+        self.username = username
+        self.email = email
         self.appVersion = appVersion
         self.buildNumber = buildNumber
         self.country = country
@@ -62,6 +70,8 @@ public struct IdentifyUserRequest: Codable, JSONEncodable, Hashable {
         case userId
         case anonymousId
         case deviceId
+        case username
+        case email
         case appVersion
         case buildNumber
         case country
@@ -80,6 +90,8 @@ public struct IdentifyUserRequest: Codable, JSONEncodable, Hashable {
         try container.encodeIfPresent(userId, forKey: .userId)
         try container.encodeIfPresent(anonymousId, forKey: .anonymousId)
         try container.encodeIfPresent(deviceId, forKey: .deviceId)
+        try container.encodeIfPresent(username, forKey: .username)
+        try container.encodeIfPresent(email, forKey: .email)
         try container.encodeIfPresent(appVersion, forKey: .appVersion)
         try container.encodeIfPresent(buildNumber, forKey: .buildNumber)
         try container.encodeIfPresent(country, forKey: .country)

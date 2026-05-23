@@ -77,11 +77,23 @@ public protocol GrowthHTTPSession: Sendable {
 extension URLSession: GrowthHTTPSession {}
 
 public actor GrowthAnalytics {
+  private enum StorageKeys {
+    static let anonymousId = "gtm_easy_growth_anonymous_id"
+    static let userId = "gtm_easy_growth_user_id"
+    static let username = "gtm_easy_growth_username"
+    static let email = "gtm_easy_growth_email"
+  }
+
   private let configuration: GrowthAnalyticsConfiguration
   private let session: GrowthHTTPSession
   private let deviceIdentifiers: GrowthDeviceIdentifiers
   private let clickIdStore: GrowthClickIdStore
+  // Identity (userId/username/email) is durable: persisted to UserDefaults so a
+  // track() after an app relaunch still attributes to the resolved user, matching
+  // DataFast's "re-identify on session change" model.
   private var userId: String?
+  private var username: String?
+  private var email: String?
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
 
@@ -95,15 +107,38 @@ public actor GrowthAnalytics {
     self.session = session
     self.deviceIdentifiers = deviceIdentifiers
     self.clickIdStore = clickIdStore ?? GrowthClickIdStore(defaults: configuration.userDefaults)
+    // Hydrate persisted identity (UserDefaults reads are synchronous).
+    self.userId = configuration.userDefaults.string(forKey: StorageKeys.userId)
+    self.username = configuration.userDefaults.string(forKey: StorageKeys.username)
+    self.email = configuration.userDefaults.string(forKey: StorageKeys.email)
   }
 
   /// Set the authenticated userId without emitting an identify event. Useful
-  /// for app launches where the user is already signed in.
+  /// for app launches where the user is already signed in. Persisted durably.
   public func setUserId(_ id: String?) {
     self.userId = id
+    persistIdentity()
   }
 
   public func getUserId() -> String? { userId }
+
+  public func getUsername() -> String? { username }
+
+  public func getEmail() -> String? { email }
+
+  /// Clear the identified user (logout): forget the persisted userId/username/
+  /// email and rotate the anonymous id so post-logout events start a fresh
+  /// anonymous stream instead of re-stitching onto the previous user.
+  public func reset() {
+    userId = nil
+    username = nil
+    email = nil
+    let defaults = configuration.userDefaults
+    defaults.removeObject(forKey: StorageKeys.userId)
+    defaults.removeObject(forKey: StorageKeys.username)
+    defaults.removeObject(forKey: StorageKeys.email)
+    defaults.set(UUID().uuidString.lowercased(), forKey: StorageKeys.anonymousId)
+  }
 
   public func getAnonymousId() -> String { anonymousId() }
 
@@ -150,14 +185,26 @@ public actor GrowthAnalytics {
     return count
   }
 
+  /// Identify the current user. `username` and `email` are first-class (not
+  /// smuggled in `traits`). Pass `nil` (the default) to leave a field unchanged;
+  /// use `reset()` to clear identity entirely. All three are persisted durably.
   @discardableResult
   public func identify(
     userId: String? = nil,
+    username: String? = nil,
+    email: String? = nil,
     traits: [String: GrowthJSONValue] = [:]
   ) async throws -> GrowthIngestResponse {
     if let userId {
       self.userId = userId
     }
+    if let username {
+      self.username = Self.normalizeIdentity(username)
+    }
+    if let email {
+      self.email = Self.normalizeIdentity(email)
+    }
+    persistIdentity()
 
     var enrichedTraits = traits
     enrichedTraits["_ctx"] = .object(await commonContext())
@@ -168,6 +215,8 @@ public actor GrowthAnalytics {
       userId: self.userId,
       anonymousId: anonymousId(),
       deviceId: nil,
+      username: self.username,
+      email: self.email,
       platform: platform,
       appVersion: appVersion,
       buildNumber: buildNumber,
@@ -177,9 +226,22 @@ public actor GrowthAnalytics {
       traits: enrichedTraits
     )
     if configuration.debug {
-      await GrowthDebugSink.shared.record(.init(kind: .identify, label: self.userId ?? "<anonymous>", properties: enrichedTraits))
+      await GrowthDebugSink.shared.record(.init(kind: .identify, label: self.userId ?? self.username ?? self.email ?? "<anonymous>", properties: enrichedTraits))
     }
     return try await post(body, path: "/api/v1/growth/users")
+  }
+
+  /// Trim an identity field; collapse empty / whitespace-only input to nil.
+  private static func normalizeIdentity(_ value: String) -> String? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return trimmed.isEmpty ? nil : trimmed
+  }
+
+  private func persistIdentity() {
+    let defaults = configuration.userDefaults
+    if let userId { defaults.set(userId, forKey: StorageKeys.userId) } else { defaults.removeObject(forKey: StorageKeys.userId) }
+    if let username { defaults.set(username, forKey: StorageKeys.username) } else { defaults.removeObject(forKey: StorageKeys.username) }
+    if let email { defaults.set(email, forKey: StorageKeys.email) } else { defaults.removeObject(forKey: StorageKeys.email) }
   }
 
   @discardableResult
@@ -233,7 +295,7 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.2.0"
+  public static let sdkVersion = "0.3.0"
 
   @discardableResult
   public func trackFirstOpen() async throws -> GrowthIngestResponse {
@@ -296,7 +358,7 @@ public actor GrowthAnalytics {
   }
 
   private func anonymousId() -> String {
-    let key = "gtm_easy_growth_anonymous_id"
+    let key = StorageKeys.anonymousId
     if let existing = configuration.userDefaults.string(forKey: key) {
       return existing
     }
@@ -360,6 +422,8 @@ private struct IdentifyBody: Encodable {
   let userId: String?
   let anonymousId: String
   let deviceId: String?
+  let username: String?
+  let email: String?
   let platform: String
   let appVersion: String?
   let buildNumber: String?

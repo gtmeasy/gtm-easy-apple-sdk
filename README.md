@@ -76,6 +76,32 @@ let configuration = GrowthAnalyticsConfiguration(
 )
 ```
 
+## Identifying users
+
+`identify` attaches a stable **userId** plus optional **username** and **email** to
+the current anonymous stream. All three are first-class (not smuggled in `traits`),
+persisted to `UserDefaults`, and reused automatically on later `track` calls — so a
+purchase after an app relaunch still attributes to the signed-in user. On the server
+these power the People dashboard and feed hashed ad-platform match keys (email is
+hashed only at ad-platform egress; plaintext at rest).
+
+```swift
+try await analytics.identify(
+  userId: "user_123",
+  username: "john_wayne",
+  email: "john@example.com",
+  traits: ["plan": .string("pro")]
+)
+```
+
+Pass only the fields you have; a `nil` argument leaves that field unchanged. On
+logout, call `reset()` to forget the identity and rotate the anonymous id so later
+events start a fresh anonymous stream instead of re-stitching onto the previous user:
+
+```swift
+await analytics.reset()
+```
+
 ## Apple Search Ads Attribution
 
 On iOS, call:

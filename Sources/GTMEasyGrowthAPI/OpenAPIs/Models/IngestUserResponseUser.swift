@@ -13,13 +13,17 @@ import AnyCodable
 public struct IngestUserResponseUser: Codable, JSONEncodable, Hashable {
 
     public private(set) var identityHash: String
+    /** Resolved stable principal (userId, else anonymousId, else deviceId) used for attribution. */
+    public private(set) var principalId: String?
 
-    public init(identityHash: String) {
+    public init(identityHash: String, principalId: String? = nil) {
         self.identityHash = identityHash
+        self.principalId = principalId
     }
 
     public enum CodingKeys: String, CodingKey, CaseIterable {
         case identityHash
+        case principalId
     }
 
     // Encodable protocol methods
@@ -27,6 +31,7 @@ public struct IngestUserResponseUser: Codable, JSONEncodable, Hashable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(identityHash, forKey: .identityHash)
+        try container.encodeIfPresent(principalId, forKey: .principalId)
     }
 }
 
