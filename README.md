@@ -17,7 +17,7 @@ The SDK sends events to the GTM Easy ingestion API, identifies users, persists a
 ## What's new (v0.2.0)
 
 - **Auto-instrumentation**: `GrowthAutoInstrument` fires `app.first_open` (once per install) + `app.opened` on every foreground.
-- **Device identifiers**: `GrowthDeviceIdentifiers.shared` reads IDFA/IDFV/ATT status; `requestTrackingAuthorization()` prompts ATT.
+- **Device identifiers**: `GrowthDeviceIdentifiers.shared` reads IDFA/IDFV/ATT status; `requestTrackingAuthorization()` prompts ATT. _(Removed in v0.4.0 — IDFV only, no ATT/IDFA.)_
 - **Click ID store**: `GrowthClickIdStore` persists every supported ad-platform click id with 90-day TTL, synthesizes Meta `_fbc`/`_fbp`. `analytics.captureClickIds(from: deepLinkURL)` walks query params.
 - **Typed paywall events**: `analytics.trackPaywallOpened(placement:variant:productIds:)` and 7 more helpers.
 - **SKAdNetwork 4.0**: `GrowthSKAN.shared.registerForAttribution()` + `updateConversion(funnel:revenue:engagementBit:lockWindow:)` with Adjust-style CV encoding.

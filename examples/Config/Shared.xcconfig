@@ -26,11 +26,9 @@ TARGETED_DEVICE_FAMILY = 1,2
 GENERATE_INFOPLIST_FILE = YES
 INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationLandscapeRight UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationPortrait
 INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationLandscapeRight UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown
-// App Tracking Transparency usage string. iOS 14.5+ requires this when the
-// app calls `ATTrackingManager.requestTrackingAuthorization()` — the prompt
-// will refuse to render without it. The GTM Easy SDK consents the user
-// before reading IDFA / writing IDFA to ad-platform connectors.
-INFOPLIST_KEY_NSUserTrackingUsageDescription = This sample uses ATT to demonstrate the GTM Easy Growth SDK's IDFA and SKAdNetwork flow. Allow tracking to see attribution land on the dashboard.
+// No App Tracking Transparency: the GTM Easy SDK collects only the first-party
+// vendor identifier (IDFV) and never touches IDFA, so NSUserTrackingUsageDescription
+// is intentionally absent.
 
 // ==========================================
 // Entitlements

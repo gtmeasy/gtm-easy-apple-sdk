@@ -16,15 +16,11 @@ import UIKit
 public actor GrowthDeviceIdentifiers {
   public static let shared = GrowthDeviceIdentifiers()
 
-  private var cachedSnapshot: GrowthDeviceSnapshot?
-
   public init() {}
 
   /// Returns the current device snapshot.
   public func snapshot() -> GrowthDeviceSnapshot {
-    let snap = GrowthDeviceSnapshot(idfv: readIDFV())
-    cachedSnapshot = snap
-    return snap
+    GrowthDeviceSnapshot(idfv: readIDFV())
   }
 
   private func readIDFV() -> String? {
