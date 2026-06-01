@@ -2,7 +2,11 @@
 
 First-party Swift Package Manager SDK for GTM Easy growth analytics, native attribution, and ad-platform conversion APIs.
 
-The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures device identifiers (IDFA/IDFV + ATT status), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution.
+The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
+
+## What's new (v0.4.0)
+
+- **Removed cross-app tracking (ATT/IDFA)**: the SDK no longer links AppTrackingTransparency or AdSupport, no longer reads the advertising identifier (IDFA), and no longer prompts for tracking authorization. `GrowthDeviceIdentifiers` now collects only the first-party vendor identifier (IDFV). Apps no longer need `NSUserTrackingUsageDescription`. **Breaking:** `requestTrackingAuthorization()`, `GrowthATTStatus`, and the `idfa`/`attStatus` fields on `GrowthDeviceSnapshot` are removed — delete any calls to them.
 
 ## What's new (v0.3.0)
 

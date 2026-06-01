@@ -1,11 +1,11 @@
 ---
 name: gtm-easy-ios
-description: Integrate the GTM Easy growth analytics SDK (`GTMEasyGrowth`) into an iOS / macOS Swift app. Use when (1) The user wants to install, wire up, or upgrade `@gtmeasy/growth` for Apple platforms, (2) The user mentions "GTM Easy", "growth analytics", "gtmeasy.com", "GrowthAnalytics", or "gtm-easy-apple-sdk", (3) The user wants to ship paywall funnel events, identify users, capture ad-platform click IDs (gclid/fbclid/...), or wire SKAdNetwork 4.0 from a Swift codebase, (4) The user wants Apple Search Ads attribution, ATT prompt, or App Store Server Notifications wired in.
+description: Integrate the GTM Easy growth analytics SDK (`GTMEasyGrowth`) into an iOS / macOS Swift app. Use when (1) The user wants to install, wire up, or upgrade `@gtmeasy/growth` for Apple platforms, (2) The user mentions "GTM Easy", "growth analytics", "gtmeasy.com", "GrowthAnalytics", or "gtm-easy-apple-sdk", (3) The user wants to ship paywall funnel events, identify users, capture ad-platform click IDs (gclid/fbclid/...), or wire SKAdNetwork 4.0 from a Swift codebase, (4) The user wants Apple Search Ads attribution or App Store Server Notifications wired in.
 ---
 
 # GTM Easy iOS / macOS integration
 
-Wire `GTMEasyGrowth` (Swift Package, iOS 15+ / macOS 12+) into the host app. Covers SPM dependency, lifecycle setup, identify + track, click-id capture, ATT/IDFA, paywall events, SKAdNetwork, and Apple Search Ads attribution.
+Wire `GTMEasyGrowth` (Swift Package, iOS 15+ / macOS 12+) into the host app. Covers SPM dependency, lifecycle setup, identify + track, click-id capture, paywall events, SKAdNetwork, and Apple Search Ads attribution. The SDK uses only the first-party IDFV — no ATT prompt, no IDFA.
 
 ## Repo layout reference
 
@@ -51,21 +51,21 @@ enum GrowthClient {
 
 `endpoint` defaults to `https://www.gtmeasy.com`. Override only for self-hosted GTM Easy or LAN dev.
 
-## 3. Launch sequence (ATT-correct order)
+## 3. Launch sequence
 
-ATT consent gates IDFA on iOS 14.5+. Fire `app.first_open` AFTER ATT resolves so the inaugural event carries the right consent state:
+The SDK does **not** use App Tracking Transparency (ATT) or the advertising
+identifier (IDFA) — it collects only the first-party vendor identifier (IDFV),
+which needs no ATT prompt and no `NSUserTrackingUsageDescription`. Start
+auto-instrumentation on launch:
 
 ```swift
 @main
 struct YourApp: App {
   init() {
     Task {
-      // 1. (iOS only) Prompt ATT before tracking — Apple requires the prompt
-      //    to appear in a user-initiated context, not background.
-      await GrowthDeviceIdentifiers.shared.requestTrackingAuthorization()
-      // 2. UserDefaults-guarded; safe to call on every launch.
+      // UserDefaults-guarded; safe to call on every launch.
       await GrowthClient.autoInstrument.start()
-      // 3. Optional: Apple Search Ads attribution token (iOS only).
+      // Optional: Apple Search Ads attribution token (iOS only).
       try? await GrowthClient.analytics.collectAppleSearchAdsAttribution()
     }
   }
@@ -132,7 +132,7 @@ Configure the App Store Connect webhook URL to `https://<your-gtm-easy-host>/api
 
 - **Don't construct `GrowthAnalytics` per call site.** It owns persistent state (mutex, userId, anon-id cache); use the singleton.
 - **Don't fire `app.first_open` from your own code.** `GrowthAutoInstrument.start()` is the only correct path.
-- **Don't pass IDFA manually.** The SDK reads `ATTrackingManager.trackingAuthorizationStatus` and suppresses IDFA when not granted.
+- **Don't add ATT/IDFA back in.** The SDK intentionally does not touch AppTrackingTransparency or the advertising identifier; it uses only the first-party IDFV.
 - **Don't hash email/phone before passing to `identify`.** The server hashes; double-hashing breaks Enhanced Matching.
 - **Don't add `GTMEasyGrowthAPI` to the app target** unless you have a concrete reason to bypass `GrowthAnalytics`.
 

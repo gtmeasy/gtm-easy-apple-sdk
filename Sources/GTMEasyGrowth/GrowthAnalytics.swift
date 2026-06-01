@@ -282,7 +282,7 @@ public actor GrowthAnalytics {
   }
 
   /// Common context attached to every event under `properties._ctx`. Includes
-  /// device identifiers (IDFA/IDFV/ATT status) + click ids (fbc/fbp/gclid/
+  /// the first-party device identifier (IDFV) + click ids (fbc/fbp/gclid/
   /// ttclid/etc) so server-side CAPI forwarders can dedupe + match.
   private func commonContext() async -> [String: GrowthJSONValue] {
     var ctx: [String: GrowthJSONValue] = [:]
@@ -295,7 +295,7 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.3.0"
+  public static let sdkVersion = "0.4.0"
 
   @discardableResult
   public func trackFirstOpen() async throws -> GrowthIngestResponse {

@@ -19,7 +19,7 @@ Workspace + SPM layout produced by `xcodebuildmcp project-scaffolding scaffold-i
 examples/
 ├── TwilarSample.xcworkspace/        # open this in Xcode
 ├── TwilarSample.xcodeproj/          # app shell
-├── TwilarSample/                    # @main + onOpenURL + ATT prompt
+├── TwilarSample/                    # @main + onOpenURL
 ├── TwilarSamplePackage/             # all feature code lives here
 │   ├── Package.swift                # depends on ../.. (the local SDK)
 │   └── Sources/TwilarSampleFeature/
@@ -77,8 +77,8 @@ default endpoint) and an environment of `.production`.
 
 ## Testing the funnel end-to-end
 
-1. Launch the app — ATT prompt fires; allow tracking to populate IDFA in
-   `properties._ctx.idfa`.
+1. Launch the app — the first-party vendor identifier (IDFV) populates
+   `properties._ctx.idfv`. (No ATT prompt — the SDK does not use IDFA.)
 2. **Click IDs** tab → tap *Capture click IDs* on the prefilled URL. The
    next event will include `gclid`, `fbclid`, etc. in `_ctx`.
 3. **Identity** tab → fill in a user id + email, tap *Identify*. Watch the
@@ -94,5 +94,4 @@ default endpoint) and an environment of `.production`.
 |------------------------------------------------|------------------------------------------------------------------------------|
 | Events show in Console but never reach backend | LAN endpoint unreachable from simulator — check the dev server is running.   |
 | 401 from `/events`                             | `writeKey` placeholder — replace with one from the dashboard.                |
-| ATT prompt never appears                       | iOS only shows it once per app — uninstall + reinstall, or reset privacy.    |
 | `collectAppleSearchAdsAttribution` returns nil | Only valid on a real device that received an Apple Search Ads attribution.   |

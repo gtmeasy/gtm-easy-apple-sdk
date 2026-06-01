@@ -28,8 +28,7 @@ public struct ContentView: View {
         .tabItem { Label("Console", systemImage: "text.viewfinder") }
     }
     // Cold-launch tracking is owned by TwilarSampleApp.launchSequence so
-    // that ATT consent + auto-instrumentation run in a fixed order. Calling
-    // trackFirstOpen/trackAppOpen here as well would race ATT and double-fire
-    // app.opened on every view appear.
+    // auto-instrumentation runs once. Calling trackFirstOpen/trackAppOpen
+    // here as well would double-fire app.opened on every view appear.
   }
 }
