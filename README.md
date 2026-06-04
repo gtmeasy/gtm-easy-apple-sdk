@@ -4,6 +4,10 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
 
+## What's new (v0.5.0)
+
+- **Version alignment**: the GTM Easy SDKs (Swift / TypeScript / Kotlin) are now unified at **0.5.0** — no API changes since 0.4.x. Folds in onboarding surveys + extensible survey metadata (v0.4.1) on top of the v0.4.0 ATT/IDFA-removal privacy release.
+
 ## What's new (v0.4.1)
 
 - **Onboarding surveys**: `analytics.submitSurvey(surveyId:responses:)` captures flexible, self-describing survey answers (single/multi choice, rating, NPS, scale, boolean, free text) with no length truncation. Build answers with the `GrowthSurveyAnswer` factories. `trackSurveyShown` / `trackSurveyStarted` power the shown→completed funnel on the dashboard.

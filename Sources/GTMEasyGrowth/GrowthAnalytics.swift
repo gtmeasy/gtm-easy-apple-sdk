@@ -295,7 +295,7 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.4.1"
+  public static let sdkVersion = "0.5.0"
 
   /// Submit a flexible onboarding-survey response. Answers are persisted to the
   /// dedicated survey store (no 240-char truncation) and a
