@@ -2,7 +2,12 @@
 
 First-party Swift Package Manager SDK for GTM Easy growth analytics, native attribution, and ad-platform conversion APIs.
 
-The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
+The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
+
+## What's new (v0.4.1)
+
+- **Onboarding surveys**: `analytics.submitSurvey(surveyId:responses:)` captures flexible, self-describing survey answers (single/multi choice, rating, NPS, scale, boolean, free text) with no length truncation. Build answers with the `GrowthSurveyAnswer` factories. `trackSurveyShown` / `trackSurveyStarted` power the shown→completed funnel on the dashboard.
+- **Extensible survey metadata**: attach free-form `metadata` to a submission (echoed onto every answer row) or to a single answer (merged over the submission-level payload) — stored in a JSON column read with `JSONExtract` on demand, no schema migration for new fields.
 
 ## What's new (v0.4.0)
 
@@ -110,6 +115,58 @@ events start a fresh anonymous stream instead of re-stitching onto the previous 
 
 ```swift
 await analytics.reset()
+```
+
+## Onboarding surveys
+
+Capture flexible onboarding-survey answers. Each answer is self-describing (it
+carries its question type + optional human label), so the GTM Easy dashboard
+aggregates choice breakdowns, rating histograms, NPS, and free-text samples
+without any server-side survey definition. Answers are stored verbatim (no
+240-char truncation) in a dedicated survey store.
+
+```swift
+// Optionally mark the survey as shown so the dashboard can compute a
+// shown → completed completion rate.
+try await analytics.trackSurveyShown(surveyId: "onboarding_v1", surveyName: "Onboarding")
+
+let ack = try await analytics.submitSurvey(
+  surveyId: "onboarding_v1",
+  responses: [
+    .singleChoice("source", "tiktok", label: "TikTok", questionText: "Where did you hear about us?"),
+    .multiChoice("goals", ["focus", "limits"], labels: ["Stay focused", "Set limits"]),
+    .nps("recommend", 9),
+    .rating("first_impression", 5),
+    .text("anything_else", "Loving it so far"),
+  ],
+  surveyName: "Onboarding",
+  surveyVersion: "2"
+)
+print(ack.submissionId, ack.accepted) // idempotency key + rows persisted
+```
+
+Pass `status: .partial` to store answers without completing the survey (no
+completion event fires), or `status: .dismissed` when the user closes it. Supply
+your own `submissionId` to make retries idempotent. A completed or dismissed
+submission also records a `survey.completed` / `survey.dismissed` lifecycle event
+for the user-journey timeline and connector fan-out.
+
+### Extensible metadata
+
+Attach free-form `metadata` to a submission (echoed onto every answer row) or to
+an individual answer (merged **over** the submission-level payload). It lands in
+a dedicated JSON column read with `JSONExtract` on demand — add A/B variants,
+answer timings, or any future field **without a schema migration**.
+
+```swift
+let ack = try await analytics.submitSurvey(
+  surveyId: "onboarding_v1",
+  responses: [
+    .rating("first_impression", 5, metadata: ["ms_to_answer": .number(1200)]),
+    .text("anything_else", "Loving it"),
+  ],
+  metadata: ["variant": .string("B"), "flow": .string("paywall_first")] // on every row
+)
 ```
 
 ## Apple Search Ads Attribution

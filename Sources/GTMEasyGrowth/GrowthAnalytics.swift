@@ -295,7 +295,57 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.4.0"
+  public static let sdkVersion = "0.4.1"
+
+  /// Submit a flexible onboarding-survey response. Answers are persisted to the
+  /// dedicated survey store (no 240-char truncation) and a
+  /// `survey.completed`/`survey.dismissed` lifecycle event is recorded for the
+  /// journey timeline + connector fan-out. `partial` submissions store answers
+  /// without a lifecycle event. Pass `submissionId` to make retries idempotent
+  /// (one is generated client-side when omitted, so a transparent retry reuses
+  /// the SAME key). Build answers with the `GrowthSurveyAnswer` factories
+  /// (`.singleChoice`, `.rating`, `.nps`, `.text`, …).
+  @discardableResult
+  public func submitSurvey(
+    surveyId: String,
+    responses: [GrowthSurveyAnswer],
+    surveyName: String? = nil,
+    surveyVersion: String? = nil,
+    status: GrowthSurveyStatus = .completed,
+    submissionId: String? = nil,
+    properties: [String: GrowthJSONValue] = [:],
+    metadata: [String: GrowthJSONValue] = [:]
+  ) async throws -> GrowthSurveyResponse {
+    // Generate the idempotency key on-device so a transparent retry reuses it
+    // and the server dedups, instead of minting a fresh UUID per attempt.
+    let resolvedSubmissionId = submissionId ?? UUID().uuidString.lowercased()
+    var enrichedProperties = properties
+    enrichedProperties["_ctx"] = .object(await commonContext())
+    let body = SurveyBody(
+      app: configuration.app,
+      environment: configuration.environment.rawValue,
+      userId: userId,
+      anonymousId: anonymousId(),
+      deviceId: nil,
+      surveyId: surveyId,
+      surveyName: surveyName,
+      surveyVersion: surveyVersion,
+      submissionId: resolvedSubmissionId,
+      status: status.rawValue,
+      platform: platform,
+      appVersion: appVersion,
+      locale: Locale.current.identifier,
+      occurredAt: iso8601Now(),
+      responses: responses,
+      properties: enrichedProperties,
+      // Submission-level extensibility payload echoed onto every answer row.
+      metadata: metadata
+    )
+    if configuration.debug {
+      await GrowthDebugSink.shared.record(.init(kind: .track, label: "survey:\(surveyId)", properties: ["status": .string(status.rawValue)]))
+    }
+    return try await post(body, path: "/api/v1/growth/surveys")
+  }
 
   @discardableResult
   public func trackFirstOpen() async throws -> GrowthIngestResponse {

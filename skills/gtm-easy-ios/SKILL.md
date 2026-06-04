@@ -128,7 +128,32 @@ The SDK encodes Adjust-style CVs and calls `SKAdNetwork.updatePostbackConversion
 
 Configure the App Store Connect webhook URL to `https://<your-gtm-easy-host>/api/v1/growth/webhooks/appstore`. The server verifies the JWS chain against Apple's leaf cert and emits `subscription.renewed` / `subscription.expired` / `subscription.refunded` events keyed to the same identity as the in-app events. No client-side wiring required.
 
-## 9. Things to NOT do
+## 9. Onboarding surveys
+
+Capture flexible onboarding answers — choice breakdowns, rating histograms, NPS, and free-text samples aggregate on the dashboard with no server-side survey definition. Mark the survey shown first (optional, drives the shown→completed rate), then submit answers built with the `GrowthSurveyAnswer` factories:
+
+```swift
+try await analytics.trackSurveyShown(surveyId: "onboarding_v1", surveyName: "Onboarding")
+
+let ack = try await analytics.submitSurvey(
+  surveyId: "onboarding_v1",
+  responses: [
+    .singleChoice("source", "tiktok", label: "TikTok", questionText: "Where did you hear about us?"),
+    .multiChoice("goals", ["focus", "limits"], labels: ["Stay focused", "Set limits"]),
+    .nps("recommend", 9),
+    .rating("first_impression", 5),
+    .text("anything_else", "Loving it so far"),
+  ],
+  surveyName: "Onboarding",
+  surveyVersion: "2"
+)
+```
+
+Pass `status: .partial` to store answers without firing a completion event, or `status: .dismissed` when the user closes it. The SDK mints the `submissionId` on-device so a transparent retry reuses the same key (server dedups); pass your own to make app-level retries idempotent. Don't truncate free text — the survey store accepts up to 2 000 chars per answer.
+
+Attach free-form `metadata: [String: GrowthJSONValue]` to the whole submission (`submitSurvey(..., metadata: ["variant": .string("B")])`, echoed onto every answer row) or to a single answer (`.rating("q", 5, metadata: ["ms_to_answer": .number(1200)])`, merged **over** the submission-level payload). It lands in a JSON column read with `JSONExtract` on demand — use it for A/B variants, answer timings, or any field you may add later, with no schema migration.
+
+## 10. Things to NOT do
 
 - **Don't construct `GrowthAnalytics` per call site.** It owns persistent state (mutex, userId, anon-id cache); use the singleton.
 - **Don't fire `app.first_open` from your own code.** `GrowthAutoInstrument.start()` is the only correct path.
@@ -136,7 +161,7 @@ Configure the App Store Connect webhook URL to `https://<your-gtm-easy-host>/api
 - **Don't hash email/phone before passing to `identify`.** The server hashes; double-hashing breaks Enhanced Matching.
 - **Don't add `GTMEasyGrowthAPI` to the app target** unless you have a concrete reason to bypass `GrowthAnalytics`.
 
-## 10. Verifying the wire-up
+## 11. Verifying the wire-up
 
 1. Build the app and open the GTM Easy dashboard → **Events** for the configured `app`.
 2. The first cold start should produce `app.first_open` + `app.opened`. Subsequent launches produce only `app.opened`.
