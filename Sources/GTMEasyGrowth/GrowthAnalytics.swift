@@ -5,7 +5,10 @@ import AdServices
 #endif
 
 public struct GrowthAnalyticsConfiguration {
-  public enum Environment: String {
+  // Sendable so `GrowthAnalytics.getEnvironment()` can return it across the actor
+  // boundary into `GrowthAutoInstrument` / the install probe without a Swift 6
+  // strict-concurrency data-race diagnostic. A raw-value enum is trivially Sendable.
+  public enum Environment: String, Sendable {
     case production
     case staging
     case development
@@ -249,7 +252,9 @@ public actor GrowthAnalytics {
     _ eventName: String,
     properties: [String: GrowthJSONValue] = [:],
     metricValue: Double? = nil,
-    metricLabel: String? = nil
+    metricLabel: String? = nil,
+    appVersionOverride: String? = nil,
+    buildNumberOverride: String? = nil
   ) async throws -> GrowthIngestResponse {
     var enrichedProperties = properties
     enrichedProperties["_ctx"] = .object(await commonContext())
@@ -262,8 +267,11 @@ public actor GrowthAnalytics {
       deviceId: nil,
       eventName: eventName,
       platform: platform,
-      appVersion: appVersion,
-      buildNumber: buildNumber,
+      // Lifecycle callers (GrowthAutoInstrument) resolve the version via injectable providers
+      // that can differ from `Bundle.main`; honour their resolved value so app.first_open /
+      // app.updated land in the right first-class version columns. Falls back to the bundle.
+      appVersion: appVersionOverride ?? appVersion,
+      buildNumber: buildNumberOverride ?? buildNumber,
       source: "native",
       country: nil,
       locale: Locale.current.identifier,
@@ -295,7 +303,11 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.5.0"
+  public static let sdkVersion = "0.6.0"
+
+  /// The configured environment. Read by `GrowthAutoInstrument` so its install probe can
+  /// gate StoreKit checks to production.
+  public func getEnvironment() -> GrowthAnalyticsConfiguration.Environment { configuration.environment }
 
   /// Submit a flexible onboarding-survey response. Answers are persisted to the
   /// dedicated survey store (no 240-char truncation) and a
@@ -348,13 +360,43 @@ public actor GrowthAnalytics {
   }
 
   @discardableResult
-  public func trackFirstOpen() async throws -> GrowthIngestResponse {
-    try await track("app.first_open")
+  public func trackFirstOpen(appVersion: String? = nil, buildNumber: String? = nil) async throws -> GrowthIngestResponse {
+    // Forward the install-time version (resolved by the caller) so the install row feeds the
+    // per-version breakdown. Defaults to the bundle values when omitted.
+    try await track("app.first_open", appVersionOverride: appVersion, buildNumberOverride: buildNumber)
   }
 
   @discardableResult
   public func trackAppOpen() async throws -> GrowthIngestResponse {
     try await track("app.opened")
+  }
+
+  /// Record that the app was updated (or that the SDK first ran on a pre-existing
+  /// install). This is deliberately NOT an install: the server never counts `app.updated`
+  /// in the install funnel, never alerts on it, and never forwards it to an ad platform.
+  /// `GrowthAutoInstrument` emits this for you — call it directly only for custom lifecycle
+  /// wiring.
+  @discardableResult
+  public func trackAppUpdated(
+    fromVersion: String?,
+    fromBuild: String?,
+    toVersion: String?,
+    toBuild: String?,
+    reason: GrowthUpdateReason,
+    isRealUpdate: Bool
+  ) async throws -> GrowthIngestResponse {
+    var properties: [String: GrowthJSONValue] = [
+      "reason": .string(reason.rawValue),
+      "is_real_update": .bool(isRealUpdate),
+    ]
+    if let fromVersion { properties["from_version"] = .string(fromVersion) }
+    if let fromBuild { properties["from_build"] = .string(fromBuild) }
+    if let toVersion { properties["to_version"] = .string(toVersion) }
+    if let toBuild { properties["to_build"] = .string(toBuild) }
+    // Send the landed version as the top-level appVersion/buildNumber so the server's
+    // per-version breakdown attributes the update to the version it landed on (not Bundle.main,
+    // which can differ when GrowthAutoInstrument uses custom version providers).
+    return try await track("app.updated", properties: properties, appVersionOverride: toVersion, buildNumberOverride: toBuild)
   }
 
   @discardableResult

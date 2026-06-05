@@ -73,7 +73,20 @@ struct YourApp: App {
 }
 ```
 
-`GrowthAutoInstrument.start()` fires `app.first_open` (once per install, persisted in UserDefaults) and `app.opened` on every cold start. NEVER call `analytics.track("app.first_open")` manually — it bypasses the idempotency guard.
+`GrowthAutoInstrument.start()` fires `app.first_open` only for a genuine fresh install (persisted in UserDefaults), `app.updated` when the app's version/build changes between launches (NOT an install), and `app.opened` on every cold start. NEVER call `analytics.track("app.first_open")` manually — it bypasses the idempotency + update guard.
+
+### Adopting the SDK in an app that already has users
+
+A bare `start()` would report your entire installed base as new installs on their next launch. Prevent it one of two ways, **before** `start()`:
+
+```swift
+// Preferred — deterministic, offline, works on every OS version. Gate on your own
+// "existing user" signal in the release that first ships the SDK.
+if userExistedBeforeThisRelease { await GrowthClient.autoInstrument.markInstalledBeforeTracking() }
+
+// Automatic alternative (iOS 16+/macOS 13+) — fail-safe, never suppresses a real fresh install:
+// GrowthAutoInstrument(analytics:, installProbe: StoreKitInstallProbe(firstTrackedAppVersion: "<first SDK build/version>"))
+```
 
 ## 4. Deep-link click-id capture
 
@@ -164,7 +177,7 @@ Attach free-form `metadata: [String: GrowthJSONValue]` to the whole submission (
 ## 11. Verifying the wire-up
 
 1. Build the app and open the GTM Easy dashboard → **Events** for the configured `app`.
-2. The first cold start should produce `app.first_open` + `app.opened`. Subsequent launches produce only `app.opened`.
+2. The first cold start on a fresh install should produce `app.first_open` + `app.opened`. Subsequent same-version launches produce only `app.opened`. After an app update, the first launch produces `app.updated` + `app.opened` (never a second `app.first_open`).
 3. Open a deep link with `?gclid=test` query — the next event's `_ctx.gclid` must be `test`.
 4. Call `analytics.identify("user_123")` — verify the dashboard's Users view shows `user_123` linked to the device's anonymous id.
 

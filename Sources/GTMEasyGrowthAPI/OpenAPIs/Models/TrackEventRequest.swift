@@ -27,6 +27,7 @@ public struct TrackEventRequest: Codable, JSONEncodable, Hashable {
     public enum EventName: String, Codable, CaseIterable {
         case appPeriodFirstOpen = "app.first_open"
         case appPeriodOpened = "app.opened"
+        case appPeriodUpdated = "app.updated"
         case userPeriodCreated = "user.created"
         case sessionPeriodStarted = "session.started"
         case sessionPeriodEnded = "session.ended"

@@ -4,6 +4,21 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
 
+## What's new (v0.6.0)
+
+- **App updates are no longer counted as new installs.** `GrowthAutoInstrument` now fires
+  `app.first_open` only for a genuine fresh install. When the app's version/build changes
+  between launches it fires `app.updated` (a non-install lifecycle event the server never
+  counts as an acquisition, never alerts on, and never forwards to an ad platform).
+- **Adoption-spike protection.** When an app with an existing user base first adds the SDK,
+  it would otherwise report every existing user as a new install. Call
+  `autoInstrument.markInstalledBeforeTracking()` for users you already know are existing
+  (signed-in, has local data), or pass a fail-safe
+  `StoreKitInstallProbe(firstTrackedAppVersion:)` to suppress them automatically (iOS 16+/
+  macOS 13+; uses Apple's `AppTransaction.originalAppVersion`, production-only, never
+  suppresses a genuine fresh install).
+- **macOS lifecycle.** `app.opened` now fires on macOS app re-activation, not just at launch.
+
 ## What's new (v0.5.0)
 
 - **Version alignment**: the GTM Easy SDKs (Swift / TypeScript / Kotlin) are now unified at **0.5.0** — no API changes since 0.4.x. Folds in onboarding surveys + extensible survey metadata (v0.4.1) on top of the v0.4.0 ATT/IDFA-removal privacy release.
@@ -79,9 +94,14 @@ let analytics = GrowthAnalytics(
 )
 
 try await analytics.identify(userId: "user_123", traits: ["plan": .string("pro")])
-try await analytics.trackFirstOpen()
 try await analytics.trackPurchaseCompleted(amount: 9.99, currency: "USD", productId: "pro_monthly")
 ```
+
+> **Lifecycle events:** wire `GrowthAutoInstrument.start()` once (see
+> [Install vs. update tracking](#install-vs-update-tracking)) — it fires `app.first_open`,
+> `app.updated`, and `app.opened` for you, gated by `UserDefaults`. Do **not** call the raw
+> `analytics.trackFirstOpen()` on every launch: it fires unconditionally and would count
+> every app *update* as a brand-new install.
 
 `endpoint` defaults to `https://www.gtmeasy.com`. Override it only when running
 against a self-hosted GTM Easy deployment or a local development server:
@@ -94,6 +114,50 @@ let configuration = GrowthAnalyticsConfiguration(
   environment: .development
 )
 ```
+
+## Install vs. update tracking
+
+`GrowthAutoInstrument.start()` is UserDefaults-guarded and safe to call on every launch.
+It emits exactly one lifecycle signal per launch:
+
+| Situation                                   | Event fired      | Counts as install? |
+|---------------------------------------------|------------------|--------------------|
+| Genuine fresh install                       | `app.first_open` | ✅ yes             |
+| App version or build changed since last run | `app.updated`    | ❌ no              |
+| Same version as last run                    | *(none)*         | ❌ no              |
+
+`app.opened` fires on top of the above, on every foreground.
+
+### Suppressing the adoption spike
+
+If you add this SDK to an app that **already has users**, every existing device would look
+like a brand-new install on its next launch. Two ways to avoid it:
+
+```swift
+// Preferred: deterministic + offline. Call once for users you know are existing,
+// in the release that first adds the SDK — BEFORE start().
+if userWasAlreadyOnboardedBeforeThisRelease {
+  await GrowthClient.autoInstrument.markInstalledBeforeTracking()
+}
+await GrowthClient.autoInstrument.start()
+```
+
+```swift
+// Automatic (iOS 16+/macOS 13+): suppress anyone whose first download predates the
+// version where you shipped the SDK. Fail-safe — never suppresses a real fresh install.
+static let autoInstrument = GrowthAutoInstrument(
+  analytics: analytics,
+  installProbe: StoreKitInstallProbe(firstTrackedAppVersion: "42") // the CFBundleVersion (iOS) / CFBundleShortVersionString (macOS) of the first SDK release
+)
+```
+
+`app.updated` carries `{ from_version, from_build, to_version, to_build, reason, is_real_update }`.
+Update adoption shows up in the dashboard's per-version breakdown; it is never an install.
+
+> **At-most-once:** the first-open flag is persisted *before* the event is sent and is never
+> retried, so the SDK never double-counts an install. The trade-off is that a device that is
+> offline on its very first launch (and never relaunches at the same version online) can miss
+> `app.first_open`. Freshly downloaded apps are almost always online, so this is rare.
 
 ## Identifying users
 
