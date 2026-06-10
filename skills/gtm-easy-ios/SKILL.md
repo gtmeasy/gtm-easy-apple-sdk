@@ -34,15 +34,39 @@ Host apps must hold a single `GrowthAnalytics` instance for the process — neve
 import Foundation
 import GTMEasyGrowth
 
+/// Helper to determine the build and distribution environment
+enum EnvHelper {
+  /// True if running in a Debug configuration (local development)
+  static var isDebug: Bool {
+    #if DEBUG
+    return true
+    #else
+    return false
+    #endif
+  }
+
+  /// True if running in the sandbox environment (TestFlight or App Store sandbox testing)
+  static var isTestFlight: Bool {
+    Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
+  }
+
+  /// True if running in a Debug or TestFlight sandbox environment
+  static var isDebugOrTestFlight: Bool {
+    isDebug || isTestFlight
+  }
+}
+
 enum GrowthClient {
   static let analytics: GrowthAnalytics = {
-    GrowthAnalytics(
+    let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+
+    return GrowthAnalytics(
       configuration: .init(
         app: "<gtm-easy-app-id>",          // from gtmeasy.com → Settings
         writeKey: "<per-app-write-key>",   // public SDK key, safe to ship
         environment: .production,          // .staging for QA
-        disabled: ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
-                  // or: disabled: _isDebugAssertConfiguration()
+        // Disable tracking during debug/local QA and TestFlight sandbox environments by default
+        disabled: EnvHelper.isDebugOrTestFlight || isPreview
       )
     )
   }()
@@ -175,7 +199,7 @@ Attach free-form `metadata: [String: GrowthJSONValue]` to the whole submission (
 - **Don't add ATT/IDFA back in.** The SDK intentionally does not touch AppTrackingTransparency or the advertising identifier; it uses only the first-party IDFV.
 - **Don't hash email/phone before passing to `identify`.** The server hashes; double-hashing breaks Enhanced Matching.
 - **Don't add `GTMEasyGrowthAPI` to the app target** unless you have a concrete reason to bypass `GrowthAnalytics`.
-- **Don't add `#if DEBUG` guards around analytics calls.** Set `disabled: _isDebugAssertConfiguration()` in the configuration instead — all methods still return valid responses and call sites stay clean.
+- **Don't add `#if DEBUG` guards around analytics calls.** Set `disabled` dynamically using `EnvHelper.isDebugOrTestFlight` in the configuration wrapper instead — all methods still return valid responses and call sites stay clean.
 
 ## 11. Verifying the wire-up
 
