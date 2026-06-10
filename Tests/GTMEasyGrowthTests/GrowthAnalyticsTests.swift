@@ -163,6 +163,44 @@ final class GrowthAnalyticsTests: XCTestCase {
     XCTAssertEqual(props["survey_id"] as? String, "onboarding_v1")
   }
 
+  func testDisabledSuppressesAllNetworkCalls() async throws {
+    let session = MockSession(response: #"{"event":{"id":"evt_1","eventName":"app.opened"},"warnings":[]}"#)
+    let disabledConfig = GrowthAnalyticsConfiguration(
+      app: "milelog",
+      writeKey: "test-write-key",
+      endpoint: URL(string: "https://gtmeasy.test")!,
+      environment: .development,
+      userDefaults: UserDefaults(suiteName: "GTMEasyGrowthTests-disabled-\(UUID().uuidString)")!,
+      disabled: true
+    )
+    let analytics = GrowthAnalytics(configuration: disabledConfig, session: session)
+
+    let identifyRes = try await analytics.identify(userId: "user_123", traits: ["plan": .string("pro")])
+    let trackRes = try await analytics.track("paywall.opened")
+    let surveyRes = try await analytics.submitSurvey(surveyId: "s1", responses: [])
+
+    let requests = await session.requests
+    XCTAssertTrue(requests.isEmpty)
+    XCTAssertNil(identifyRes.event)
+    XCTAssertNil(trackRes.event)
+    XCTAssertEqual(surveyRes.accepted, 0)
+    XCTAssertFalse(surveyRes.submissionId.isEmpty)
+  }
+
+  func testDisabledEchosCallerSubmissionId() async throws {
+    let session = MockSession(response: "{}")
+    let disabledConfig = GrowthAnalyticsConfiguration(
+      app: "milelog",
+      writeKey: "test-write-key",
+      endpoint: URL(string: "https://gtmeasy.test")!,
+      userDefaults: UserDefaults(suiteName: "GTMEasyGrowthTests-disabled-sub-\(UUID().uuidString)")!,
+      disabled: true
+    )
+    let analytics = GrowthAnalytics(configuration: disabledConfig, session: session)
+    let res = try await analytics.submitSurvey(surveyId: "s1", responses: [], submissionId: "caller-id")
+    XCTAssertEqual(res.submissionId, "caller-id")
+  }
+
   func testConfigurationDefaultsToProductionEndpoint() {
     let config = GrowthAnalyticsConfiguration(app: "milelog", writeKey: "test-write-key")
     XCTAssertEqual(config.endpoint.absoluteString, "https://www.gtmeasy.com")

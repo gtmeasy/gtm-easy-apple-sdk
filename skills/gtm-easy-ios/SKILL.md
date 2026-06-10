@@ -40,7 +40,9 @@ enum GrowthClient {
       configuration: .init(
         app: "<gtm-easy-app-id>",          // from gtmeasy.com → Settings
         writeKey: "<per-app-write-key>",   // public SDK key, safe to ship
-        environment: .production           // .staging for QA
+        environment: .production,          // .staging for QA
+        disabled: ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+                  // or: disabled: _isDebugAssertConfiguration()
       )
     )
   }()
@@ -173,6 +175,7 @@ Attach free-form `metadata: [String: GrowthJSONValue]` to the whole submission (
 - **Don't add ATT/IDFA back in.** The SDK intentionally does not touch AppTrackingTransparency or the advertising identifier; it uses only the first-party IDFV.
 - **Don't hash email/phone before passing to `identify`.** The server hashes; double-hashing breaks Enhanced Matching.
 - **Don't add `GTMEasyGrowthAPI` to the app target** unless you have a concrete reason to bypass `GrowthAnalytics`.
+- **Don't add `#if DEBUG` guards around analytics calls.** Set `disabled: _isDebugAssertConfiguration()` in the configuration instead — all methods still return valid responses and call sites stay clean.
 
 ## 11. Verifying the wire-up
 

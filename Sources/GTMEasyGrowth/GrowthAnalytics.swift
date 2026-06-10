@@ -26,6 +26,10 @@ public struct GrowthAnalyticsConfiguration {
   /// When true, every identify/track is mirrored to `GrowthDebugSink.shared`
   /// before the network call and emitted on `GrowthDebugSink.notificationName`.
   public let debug: Bool
+  /// When true, all network calls are suppressed and every method returns an
+  /// empty noop response. Use to disable tracking in development or CI
+  /// environments without removing SDK call sites from your code.
+  public let disabled: Bool
 
   public init(
     app: String,
@@ -33,7 +37,8 @@ public struct GrowthAnalyticsConfiguration {
     endpoint: URL = GrowthAnalyticsConfiguration.defaultEndpoint,
     environment: Environment = .production,
     userDefaults: UserDefaults = .standard,
-    debug: Bool = false
+    debug: Bool = false,
+    disabled: Bool = false
   ) {
     self.app = app
     self.endpoint = endpoint
@@ -41,6 +46,7 @@ public struct GrowthAnalyticsConfiguration {
     self.environment = environment
     self.userDefaults = userDefaults
     self.debug = debug
+    self.disabled = disabled
   }
 
   /// Source-compatible initializer for pre-default-endpoint call sites that
@@ -198,6 +204,7 @@ public actor GrowthAnalytics {
     email: String? = nil,
     traits: [String: GrowthJSONValue] = [:]
   ) async throws -> GrowthIngestResponse {
+    if configuration.disabled { return GrowthIngestResponse(event: nil, warnings: []) }
     if let userId {
       self.userId = userId
     }
@@ -256,6 +263,7 @@ public actor GrowthAnalytics {
     appVersionOverride: String? = nil,
     buildNumberOverride: String? = nil
   ) async throws -> GrowthIngestResponse {
+    if configuration.disabled { return GrowthIngestResponse(event: nil, warnings: []) }
     var enrichedProperties = properties
     enrichedProperties["_ctx"] = .object(await commonContext())
 
@@ -303,7 +311,7 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.6.0"
+  public static let sdkVersion = "0.7.0"
 
   /// The configured environment. Read by `GrowthAutoInstrument` so its install probe can
   /// gate StoreKit checks to production.
@@ -328,6 +336,9 @@ public actor GrowthAnalytics {
     properties: [String: GrowthJSONValue] = [:],
     metadata: [String: GrowthJSONValue] = [:]
   ) async throws -> GrowthSurveyResponse {
+    if configuration.disabled {
+      return GrowthSurveyResponse(submissionId: submissionId ?? UUID().uuidString.lowercased(), accepted: 0, warnings: [])
+    }
     // Generate the idempotency key on-device so a transparent retry reuses it
     // and the server dedups, instead of minting a fresh UUID per attempt.
     let resolvedSubmissionId = submissionId ?? UUID().uuidString.lowercased()
@@ -410,6 +421,7 @@ public actor GrowthAnalytics {
 
   @discardableResult
   public func collectAppleSearchAdsAttribution() async throws -> GrowthAttributionResponse? {
+    if configuration.disabled { return nil }
     #if canImport(AdServices) && os(iOS)
     let token = try AAAttribution.attributionToken()
     let body = AppleAttributionBody(
