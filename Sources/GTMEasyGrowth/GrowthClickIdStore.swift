@@ -10,6 +10,11 @@ public actor GrowthClickIdStore {
 
   private let defaults: UserDefaults
   private let prefix = "gtm_easy_growth_click_id_"
+  // In-memory mirror of persisted click-id payloads. Persistence is marshalled to the main
+  // thread (see growthPersistOnMain), so reads consult this mirror to stay correct within a
+  // session regardless of when the asynchronous write lands. Hydrated lazily per key.
+  private var memory: [String: [String: Any]] = [:]
+  private var hydrated: Set<String> = []
 
   /// 90 days matches Meta's `_fbc` cookie semantics and TikTok's `ttclid`
   /// retention. Click ids older than this should be considered stale.
@@ -27,12 +32,15 @@ public actor GrowthClickIdStore {
       "value": trimmed,
       "ts": at.timeIntervalSince1970,
     ]
-    defaults.set(payload, forKey: key(provider))
+    let storageKey = key(provider)
+    memory[storageKey] = payload
+    hydrated.insert(storageKey)
+    growthPersistOnMain { [defaults] in defaults.set(payload, forKey: storageKey) }
   }
 
   /// Returns the current value if present and not stale.
   public func current(_ provider: GrowthClickProvider, ttl: TimeInterval = defaultTTL, now: Date = Date()) -> String? {
-    guard let payload = defaults.dictionary(forKey: key(provider)) else { return nil }
+    guard let payload = storedPayload(for: provider) else { return nil }
     guard let value = payload["value"] as? String, !value.isEmpty else { return nil }
     if let ts = payload["ts"] as? TimeInterval {
       if now.timeIntervalSince1970 - ts > ttl { return nil }
@@ -41,7 +49,10 @@ public actor GrowthClickIdStore {
   }
 
   public func clear(_ provider: GrowthClickProvider) {
-    defaults.removeObject(forKey: key(provider))
+    let storageKey = key(provider)
+    memory[storageKey] = nil
+    hydrated.insert(storageKey)
+    growthPersistOnMain { [defaults] in defaults.removeObject(forKey: storageKey) }
   }
 
   /// Snapshot of all known click ids, ready to merge into an event payload.
@@ -85,6 +96,20 @@ public actor GrowthClickIdStore {
 
   private func key(_ provider: GrowthClickProvider) -> String {
     "\(prefix)\(provider.rawValue)"
+  }
+
+  /// Reads a persisted payload through the in-memory mirror so a value recorded earlier in
+  /// the session is visible even before its main-thread write lands. Hydrates lazily from
+  /// `defaults` the first time a key is read.
+  private func storedPayload(for provider: GrowthClickProvider) -> [String: Any]? {
+    let storageKey = key(provider)
+    if !hydrated.contains(storageKey) {
+      hydrated.insert(storageKey)
+      if let persisted = defaults.dictionary(forKey: storageKey) {
+        memory[storageKey] = persisted
+      }
+    }
+    return memory[storageKey]
   }
 }
 

@@ -76,7 +76,7 @@ final class GrowthAutoInstrumentTests: XCTestCase {
     let defaults = freshDefaults()
     // Seed a prior run at the same version.
     let seed = GrowthInstallState(defaults: defaults)
-    _ = seed.resolveLaunch(currentVersion: "1.0.0", currentBuild: "10", signal: .fresh, environment: .production, trackBuildChanges: false, now: Date(timeIntervalSince1970: 1))
+    _ = await seed.resolveLaunch(currentVersion: "1.0.0", currentBuild: "10", signal: .fresh, environment: .production, trackBuildChanges: false, now: Date(timeIntervalSince1970: 1))
 
     let session = MockSession(response: #"{"event":{"id":"e","eventName":"x"},"warnings":[]}"#)
     let instrument = GrowthAutoInstrument(
@@ -92,7 +92,7 @@ final class GrowthAutoInstrumentTests: XCTestCase {
   func testVersionChangeFiresAppUpdated() async throws {
     let defaults = freshDefaults()
     let seed = GrowthInstallState(defaults: defaults)
-    _ = seed.resolveLaunch(currentVersion: "0.9.0", currentBuild: "9", signal: .fresh, environment: .production, trackBuildChanges: false, now: Date(timeIntervalSince1970: 1))
+    _ = await seed.resolveLaunch(currentVersion: "0.9.0", currentBuild: "9", signal: .fresh, environment: .production, trackBuildChanges: false, now: Date(timeIntervalSince1970: 1))
 
     let session = MockSession(response: #"{"event":{"id":"e","eventName":"x"},"warnings":[]}"#)
     let instrument = GrowthAutoInstrument(

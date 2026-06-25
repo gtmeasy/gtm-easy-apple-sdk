@@ -68,7 +68,7 @@ struct GrowthInstallState {
     environment: GrowthAnalyticsConfiguration.Environment,
     trackBuildChanges: Bool,
     now: Date
-  ) -> GrowthLaunchType {
+  ) async -> GrowthLaunchType {
     let alreadyFired = defaults.bool(forKey: Keys.firstOpenFired)
     let lastVersion = defaults.string(forKey: Keys.lastAppVersion)
     let lastBuild = defaults.string(forKey: Keys.lastBuildNumber)
@@ -78,17 +78,17 @@ struct GrowthInstallState {
       // pre-tracking install that set `first_open_fired` before version bookkeeping. With
       // nothing to diff against, adopt this launch's version as the baseline silently —
       // never fabricate an `app.updated(versionChange, fromVersion: nil)`.
-      if lastVersion == nil, lastBuild == nil { persistBaseline(currentVersion, currentBuild); return .launch }
+      if lastVersion == nil, lastBuild == nil { await persistBaseline(currentVersion, currentBuild); return .launch }
       // Only a *present* current value that differs is a real change; a nil current carries
       // no information and must not fabricate an app.updated (and must not wipe the baseline).
       let versionChanged = currentVersion != nil && lastVersion != currentVersion
       let buildChanged = currentBuild != nil && lastBuild != currentBuild
-      guard versionChanged || buildChanged else { persistBaseline(currentVersion, currentBuild); return .launch }
+      guard versionChanged || buildChanged else { await persistBaseline(currentVersion, currentBuild); return .launch }
       let reason: GrowthUpdateReason = versionChanged ? .versionChange : .buildChange
       // Build numbers churn on every CI build; outside production a build-only bump is
       // noise unless explicitly opted in.
       if reason == .buildChange, environment != .production, !trackBuildChanges {
-        persistBaseline(currentVersion, currentBuild); return .launch
+        await persistBaseline(currentVersion, currentBuild); return .launch
       }
       // REAL update: do NOT advance the baseline here. The caller persists it via
       // `persistBaseline` only AFTER the `app.updated` event posts, so a transient send
@@ -98,44 +98,48 @@ struct GrowthInstallState {
     }
 
     // First SDK run on this install.
-    defaults.set(true, forKey: Keys.firstOpenFired)
+    await growthPersistOnMainAndWait { [defaults] in defaults.set(true, forKey: Keys.firstOpenFired) }
     if signal == .existed {
       // Pre-existing install adopting the SDK: record it, but never count it as an install.
       // No `install_at` — we don't know the real install date. We mark first-open + adopt the
       // baseline BEFORE sending (at-most-once): if this one adoption event fails to send it is
       // lost, which is the safe tradeoff — retrying would re-run the probe and a flaky probe
       // could then misclassify a pre-existing user as a brand-new install.
-      persistBaseline(currentVersion, currentBuild)
+      await persistBaseline(currentVersion, currentBuild)
       return .update(reason: .preExistingInstall, fromVersion: nil, fromBuild: nil)
     }
     // `.fresh` or `.unknown` → treat as a genuine fresh install (never under-count). At-most-once:
     // baseline persisted before send so a failed install is never re-counted.
-    defaults.set(now.timeIntervalSince1970, forKey: Keys.installAt)
-    persistBaseline(currentVersion, currentBuild)
+    await growthPersistOnMainAndWait { [defaults] in defaults.set(now.timeIntervalSince1970, forKey: Keys.installAt) }
+    await persistBaseline(currentVersion, currentBuild)
     return .freshInstall
   }
 
   /// Advance the stored version/build baseline. Called by `resolveLaunch` for non-real-update
   /// outcomes, and by the lifecycle caller AFTER a real `app.updated` posts (at-least-once).
   /// Only writes present values, so a nil current never erases a good baseline.
-  func persistBaseline(_ currentVersion: String?, _ currentBuild: String?) {
-    if let currentVersion { defaults.set(currentVersion, forKey: Keys.lastAppVersion) }
-    if let currentBuild { defaults.set(currentBuild, forKey: Keys.lastBuildNumber) }
+  func persistBaseline(_ currentVersion: String?, _ currentBuild: String?) async {
+    await growthPersistOnMainAndWait { [defaults] in
+      if let currentVersion { defaults.set(currentVersion, forKey: Keys.lastAppVersion) }
+      if let currentBuild { defaults.set(currentBuild, forKey: Keys.lastBuildNumber) }
+    }
   }
 
   /// Mark this install as pre-existing without firing `app.first_open`. Idempotent — a
   /// no-op once the first-open flag is set. The deterministic, offline mitigation an
   /// integrator calls in the release that first adds the SDK, for users it already knows
   /// are existing (e.g. signed-in, has local data).
-  func markInstalledBeforeTracking(currentVersion: String?, currentBuild: String?) {
+  func markInstalledBeforeTracking(currentVersion: String?, currentBuild: String?) async {
     guard !defaults.bool(forKey: Keys.firstOpenFired) else { return }
-    defaults.set(true, forKey: Keys.firstOpenFired)
-    setOrRemove(Keys.lastAppVersion, currentVersion)
-    setOrRemove(Keys.lastBuildNumber, currentBuild)
+    await growthPersistOnMainAndWait { [defaults] in defaults.set(true, forKey: Keys.firstOpenFired) }
+    await setOrRemove(Keys.lastAppVersion, currentVersion)
+    await setOrRemove(Keys.lastBuildNumber, currentBuild)
   }
 
-  private func setOrRemove(_ key: String, _ value: String?) {
-    if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+  private func setOrRemove(_ key: String, _ value: String?) async {
+    await growthPersistOnMainAndWait { [defaults] in
+      if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) }
+    }
   }
 }
 

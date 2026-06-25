@@ -79,8 +79,8 @@ public actor GrowthAutoInstrument {
   /// Mark this install as pre-existing without firing `app.first_open`. Idempotent.
   /// Call this in the release that first adds the SDK, for users you already know are
   /// existing (signed-in, has local data), to avoid counting them as new installs.
-  public func markInstalledBeforeTracking() {
-    installState.markInstalledBeforeTracking(
+  public func markInstalledBeforeTracking() async {
+    await installState.markInstalledBeforeTracking(
       currentVersion: appVersionProvider(),
       currentBuild: buildNumberProvider()
     )
@@ -103,7 +103,7 @@ public actor GrowthAutoInstrument {
       ? .unknown
       : await probe.priorInstallSignal(environment: environment, currentVersion: originalKeySpaceCurrent)
 
-    let launch = installState.resolveLaunch(
+    let launch = await installState.resolveLaunch(
       currentVersion: version,
       currentBuild: build,
       signal: signal,
@@ -129,7 +129,7 @@ public actor GrowthAutoInstrument {
         // above threw, the baseline is untouched so the next launch retries this update.
         // pre-existing already adopted its baseline in resolveLaunch (at-most-once, by design).
         if reason != .preExistingInstall {
-          installState.persistBaseline(version, build)
+          await installState.persistBaseline(version, build)
         }
       } catch { /* swallow — baseline unchanged on failure, so the update retries next launch */ }
     case .launch:

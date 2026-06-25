@@ -103,6 +103,11 @@ public actor GrowthAnalytics {
   private var userId: String?
   private var username: String?
   private var email: String?
+  // The generated anonymous id is persisted on the main thread asynchronously
+  // (see growthPersistOnMain), so it is mirrored here to keep every read within a
+  // session stable — otherwise two events fired back-to-back at launch could each
+  // regenerate a different id before the first write lands.
+  private var anonymousIdCache: String?
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
 
@@ -124,9 +129,9 @@ public actor GrowthAnalytics {
 
   /// Set the authenticated userId without emitting an identify event. Useful
   /// for app launches where the user is already signed in. Persisted durably.
-  public func setUserId(_ id: String?) {
+  public func setUserId(_ id: String?) async {
     self.userId = id
-    persistIdentity()
+    await persistIdentity()
   }
 
   public func getUserId() -> String? { userId }
@@ -138,15 +143,19 @@ public actor GrowthAnalytics {
   /// Clear the identified user (logout): forget the persisted userId/username/
   /// email and rotate the anonymous id so post-logout events start a fresh
   /// anonymous stream instead of re-stitching onto the previous user.
-  public func reset() {
+  public func reset() async {
     userId = nil
     username = nil
     email = nil
+    let rotatedAnonymousId = UUID().uuidString.lowercased()
+    anonymousIdCache = rotatedAnonymousId
     let defaults = configuration.userDefaults
-    defaults.removeObject(forKey: StorageKeys.userId)
-    defaults.removeObject(forKey: StorageKeys.username)
-    defaults.removeObject(forKey: StorageKeys.email)
-    defaults.set(UUID().uuidString.lowercased(), forKey: StorageKeys.anonymousId)
+    await growthPersistOnMainAndWait {
+      defaults.removeObject(forKey: StorageKeys.userId)
+      defaults.removeObject(forKey: StorageKeys.username)
+      defaults.removeObject(forKey: StorageKeys.email)
+      defaults.set(rotatedAnonymousId, forKey: StorageKeys.anonymousId)
+    }
   }
 
   public func getAnonymousId() -> String { anonymousId() }
@@ -214,7 +223,7 @@ public actor GrowthAnalytics {
     if let email {
       self.email = Self.normalizeIdentity(email)
     }
-    persistIdentity()
+    await persistIdentity()
 
     var enrichedTraits = traits
     enrichedTraits["_ctx"] = .object(await commonContext())
@@ -247,11 +256,14 @@ public actor GrowthAnalytics {
     return trimmed.isEmpty ? nil : trimmed
   }
 
-  private func persistIdentity() {
+  private func persistIdentity() async {
     let defaults = configuration.userDefaults
-    if let userId { defaults.set(userId, forKey: StorageKeys.userId) } else { defaults.removeObject(forKey: StorageKeys.userId) }
-    if let username { defaults.set(username, forKey: StorageKeys.username) } else { defaults.removeObject(forKey: StorageKeys.username) }
-    if let email { defaults.set(email, forKey: StorageKeys.email) } else { defaults.removeObject(forKey: StorageKeys.email) }
+    let userId = self.userId, username = self.username, email = self.email
+    await growthPersistOnMainAndWait {
+      if let userId { defaults.set(userId, forKey: StorageKeys.userId) } else { defaults.removeObject(forKey: StorageKeys.userId) }
+      if let username { defaults.set(username, forKey: StorageKeys.username) } else { defaults.removeObject(forKey: StorageKeys.username) }
+      if let email { defaults.set(email, forKey: StorageKeys.email) } else { defaults.removeObject(forKey: StorageKeys.email) }
+    }
   }
 
   @discardableResult
@@ -311,7 +323,7 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.7.1"
+  public static let sdkVersion = "0.7.2"
 
   /// The configured environment. Read by `GrowthAutoInstrument` so its install probe can
   /// gate StoreKit checks to production.
@@ -462,12 +474,16 @@ public actor GrowthAnalytics {
   }
 
   private func anonymousId() -> String {
+    if let anonymousIdCache { return anonymousIdCache }
     let key = StorageKeys.anonymousId
     if let existing = configuration.userDefaults.string(forKey: key) {
+      anonymousIdCache = existing
       return existing
     }
     let generated = UUID().uuidString.lowercased()
-    configuration.userDefaults.set(generated, forKey: key)
+    anonymousIdCache = generated
+    let defaults = configuration.userDefaults
+    growthPersistOnMain { defaults.set(generated, forKey: key) }
     return generated
   }
 
