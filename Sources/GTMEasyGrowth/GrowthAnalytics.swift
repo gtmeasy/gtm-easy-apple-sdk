@@ -97,6 +97,7 @@ public actor GrowthAnalytics {
   private let session: GrowthHTTPSession
   private let deviceIdentifiers: GrowthDeviceIdentifiers
   private let clickIdStore: GrowthClickIdStore
+  private let systemContext: GrowthSystemContextProviding
   // Identity (userId/username/email) is durable: persisted to UserDefaults so a
   // track() after an app relaunch still attributes to the resolved user, matching
   // DataFast's "re-identify on session change" model.
@@ -115,12 +116,14 @@ public actor GrowthAnalytics {
     configuration: GrowthAnalyticsConfiguration,
     session: GrowthHTTPSession = URLSession.shared,
     deviceIdentifiers: GrowthDeviceIdentifiers = .shared,
-    clickIdStore: GrowthClickIdStore? = nil
+    clickIdStore: GrowthClickIdStore? = nil,
+    systemContext: GrowthSystemContextProviding = LiveGrowthSystemContextProvider.shared
   ) {
     self.configuration = configuration
     self.session = session
     self.deviceIdentifiers = deviceIdentifiers
     self.clickIdStore = clickIdStore ?? GrowthClickIdStore(defaults: configuration.userDefaults)
+    self.systemContext = systemContext
     // Hydrate persisted identity (UserDefaults reads are synchronous).
     self.userId = configuration.userDefaults.string(forKey: StorageKeys.userId)
     self.username = configuration.userDefaults.string(forKey: StorageKeys.username)
@@ -227,6 +230,7 @@ public actor GrowthAnalytics {
 
     var enrichedTraits = traits
     enrichedTraits["_ctx"] = .object(await commonContext())
+    let sys = systemContext.current()
 
     let body = IdentifyBody(
       app: configuration.app,
@@ -240,8 +244,8 @@ public actor GrowthAnalytics {
       appVersion: appVersion,
       buildNumber: buildNumber,
       country: nil,
-      locale: Locale.current.identifier,
-      timezone: TimeZone.current.identifier,
+      locale: sys.locale,
+      timezone: sys.timezone,
       traits: enrichedTraits
     )
     if configuration.debug {
@@ -278,6 +282,7 @@ public actor GrowthAnalytics {
     if configuration.disabled { return GrowthIngestResponse(event: nil, warnings: []) }
     var enrichedProperties = properties
     enrichedProperties["_ctx"] = .object(await commonContext())
+    let sys = systemContext.current()
 
     let body = EventBody(
       app: configuration.app,
@@ -294,8 +299,8 @@ public actor GrowthAnalytics {
       buildNumber: buildNumberOverride ?? buildNumber,
       source: "native",
       country: nil,
-      locale: Locale.current.identifier,
-      timezone: TimeZone.current.identifier,
+      locale: sys.locale,
+      timezone: sys.timezone,
       attributionProvider: nil,
       attributionId: nil,
       occurredAt: iso8601Now(),
@@ -310,20 +315,22 @@ public actor GrowthAnalytics {
   }
 
   /// Common context attached to every event under `properties._ctx`. Includes
-  /// the first-party device identifier (IDFV) + click ids (fbc/fbp/gclid/
-  /// ttclid/etc) so server-side CAPI forwarders can dedupe + match.
+  /// the first-party device identifier (IDFV), click ids (fbc/fbp/gclid/
+  /// ttclid/etc), and device locale/timezone system snapshot so server-side
+  /// CAPI forwarders can dedupe + match and dashboards can JSONExtract.
   private func commonContext() async -> [String: GrowthJSONValue] {
     var ctx: [String: GrowthJSONValue] = [:]
     let device = await deviceIdentifiers.snapshot()
     for (k, v) in device.asProperties { ctx[k] = v }
     let clicks = await clickIdStore.snapshot()
     for (k, v) in clicks { ctx[k] = v }
+    for (k, v) in systemContext.current().asContextProperties { ctx[k] = v }
     ctx["sdk"] = .string("gtm-easy-swift")
     ctx["sdk_version"] = .string(GrowthAnalytics.sdkVersion)
     return ctx
   }
 
-  public static let sdkVersion = "0.7.2"
+  public static let sdkVersion = "0.8.0"
 
   /// The configured environment. Read by `GrowthAutoInstrument` so its install probe can
   /// gate StoreKit checks to production.
@@ -356,6 +363,7 @@ public actor GrowthAnalytics {
     let resolvedSubmissionId = submissionId ?? UUID().uuidString.lowercased()
     var enrichedProperties = properties
     enrichedProperties["_ctx"] = .object(await commonContext())
+    let sys = systemContext.current()
     let body = SurveyBody(
       app: configuration.app,
       environment: configuration.environment.rawValue,
@@ -369,7 +377,7 @@ public actor GrowthAnalytics {
       status: status.rawValue,
       platform: platform,
       appVersion: appVersion,
-      locale: Locale.current.identifier,
+      locale: sys.locale,
       occurredAt: iso8601Now(),
       responses: responses,
       properties: enrichedProperties,
@@ -436,6 +444,7 @@ public actor GrowthAnalytics {
     if configuration.disabled { return nil }
     #if canImport(AdServices) && os(iOS)
     let token = try AAAttribution.attributionToken()
+    let sys = systemContext.current()
     let body = AppleAttributionBody(
       app: configuration.app,
       environment: configuration.environment.rawValue,
@@ -447,8 +456,8 @@ public actor GrowthAnalytics {
       buildNumber: buildNumber,
       source: "native",
       country: nil,
-      locale: Locale.current.identifier,
-      timezone: TimeZone.current.identifier,
+      locale: sys.locale,
+      timezone: sys.timezone,
       occurredAt: iso8601Now(),
       properties: [:],
       appleAttributionToken: token

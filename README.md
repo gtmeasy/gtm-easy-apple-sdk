@@ -4,6 +4,32 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
 
+## What's new (v0.8.0)
+
+- **System context (locale / timezone).** Every `identify` / `track` / survey / Apple Search Ads
+  call now sends BCP-47 `locale` (e.g. `en-US`) and IANA `timezone` (e.g. `America/Los_Angeles`)
+  via Foundation (`Locale` / `TimeZone`), matching Kotlin/JS. A denser snapshot is mirrored under
+  `properties._ctx`: `region`, `language`, `utc_offset_min`, `preferred_languages` (≤5),
+  `calendar`, `measurement_system` (iOS 16+ / macOS 13+). No location permission; Settings only.
+- **Injectable for tests.** Pass `systemContext: FixedGrowthSystemContextProvider(...)` into
+  `GrowthAnalytics` so unit tests don't depend on the host machine's locale/tz.
+- **Not geo country.** Top-level `country` stays unset on the client (server fills IP geo from
+  Cloudflare). Settings region lives only in `_ctx.region`.
+
+## Context fields (stable contract)
+
+| Field | Where | Source |
+|--------|--------|--------|
+| `locale` | top-level + `_ctx` | BCP-47 from `Locale` |
+| `timezone` | top-level + `_ctx` | IANA from `TimeZone` |
+| `country` | top-level | server IP geo only (client sends `null`) |
+| `_ctx.region` | `_ctx` | Settings region code (`US`, …) |
+| `_ctx.language` | `_ctx` | primary language subtag |
+| `_ctx.utc_offset_min` | `_ctx` | minutes from UTC (DST-aware) |
+| `_ctx.preferred_languages` | `_ctx` | up to 5 preferred tags |
+| `_ctx.idfv` | `_ctx` | first-party vendor id |
+| click ids | `_ctx` | fbc/fbp/gclid/… |
+
 ## What's new (v0.6.0)
 
 - **App updates are no longer counted as new installs.** `GrowthAutoInstrument` now fires
