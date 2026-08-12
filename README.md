@@ -4,6 +4,19 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
 
+## What's new (v0.9.0)
+
+- **Hardware device context on every event.** `GrowthDeviceIdentifiers` now attaches raw
+  hardware fields under `properties._ctx` (matching Android):
+  - `device_model` — raw `utsname.machine` (e.g. `iPhone17,1`), **not** a marketing name
+  - `device_manufacturer` — always `Apple`
+  - `os_version` — system version string
+  - `physical_memory_bytes` — `ProcessInfo.processInfo.physicalMemory`
+  - plus existing `idfv`
+- **Server maps marketing names.** GTM Easy enrichers map `device_model` →
+  `device_model_label` (e.g. `iPhone 16 Pro`) before Discord / dashboard display. Clients
+  must not ship a marketing-name table.
+
 ## What's new (v0.8.0)
 
 - **System context (locale / timezone).** Every `identify` / `track` / survey / Apple Search Ads
@@ -28,6 +41,10 @@ The SDK sends events to the GTM Easy ingestion API, identifies users, persists a
 | `_ctx.utc_offset_min` | `_ctx` | minutes from UTC (DST-aware) |
 | `_ctx.preferred_languages` | `_ctx` | up to 5 preferred tags |
 | `_ctx.idfv` | `_ctx` | first-party vendor id |
+| `_ctx.device_model` | `_ctx` | raw `utsname.machine` (`iPhone17,1`) |
+| `_ctx.device_manufacturer` | `_ctx` | `Apple` |
+| `_ctx.os_version` | `_ctx` | system version |
+| `_ctx.physical_memory_bytes` | `_ctx` | physical RAM in bytes |
 | click ids | `_ctx` | fbc/fbp/gclid/… |
 
 ## What's new (v0.6.0)

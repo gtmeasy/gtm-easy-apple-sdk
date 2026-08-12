@@ -315,9 +315,11 @@ public actor GrowthAnalytics {
   }
 
   /// Common context attached to every event under `properties._ctx`. Includes
-  /// the first-party device identifier (IDFV), click ids (fbc/fbp/gclid/
-  /// ttclid/etc), and device locale/timezone system snapshot so server-side
-  /// CAPI forwarders can dedupe + match and dashboards can JSONExtract.
+  /// the first-party device identifier (IDFV), raw hardware model + OS + RAM,
+  /// click ids (fbc/fbp/gclid/ttclid/etc), and device locale/timezone so
+  /// server-side CAPI forwarders can dedupe + match and dashboards can
+  /// JSONExtract. Marketing device names are mapped server-side from
+  /// `_ctx.device_model` (raw `utsname.machine`); clients never ship that table.
   private func commonContext() async -> [String: GrowthJSONValue] {
     var ctx: [String: GrowthJSONValue] = [:]
     let device = await deviceIdentifiers.snapshot()
@@ -330,7 +332,7 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.8.0"
+  public static let sdkVersion = "0.9.0"
 
   /// The configured environment. Read by `GrowthAutoInstrument` so its install probe can
   /// gate StoreKit checks to production.
