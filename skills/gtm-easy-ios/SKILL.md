@@ -154,6 +154,24 @@ try await analytics.trackPurchaseCompleted(amount: 49.99, currency: "USD", produ
 
 Also available: `trackPaywallUpgradeCancelled`, `trackPaywallClosed`, `trackTrialStarted`, `trackRestoreCompleted`.
 
+## 6b. StoreKit 2 purchase tracking (v0.10.0)
+
+Opt-in automatic purchase events — once per transaction, no historical backfill:
+
+```swift
+let purchases = GrowthPurchaseTracker(analytics: GrowthClient.analytics)
+await purchases.start()                  // launch, after analytics is configured
+// after Product.purchase():
+await purchases.track(result)
+// on foreground / after restore or a purchase via another SDK (RevenueCat, etc.):
+await purchases.sync()
+```
+
+- First run baselines `Transaction.all` without sending — existing customers are not reported as new sales.
+- Never calls `transaction.finish()` — finish in your purchase flow after granting entitlement.
+- Refunds send negative `metricValue` so revenue MVs net out.
+- Sandbox/Xcode transactions include `store_environment` for server-side filtering.
+
 ## 7. SKAdNetwork 4.0
 
 ```swift

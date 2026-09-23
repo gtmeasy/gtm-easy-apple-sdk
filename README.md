@@ -4,6 +4,27 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
 
+## What's new (v0.10.0)
+
+- **StoreKit 2 purchase tracking.** Opt-in `GrowthPurchaseTracker` sends
+  `purchase.completed` and `purchase.refunded` exactly once per transaction
+  through the existing analytics pipeline — no historical backfill on first run.
+
+```swift
+let purchases = GrowthPurchaseTracker(analytics: analytics)
+await purchases.start()                  // at launch, after analytics is configured
+// after Product.purchase():
+await purchases.track(result)
+// on foreground / after a restore or a purchase made by another SDK:
+await purchases.sync()
+```
+
+Rules:
+- Each transaction is reported at most once (completed + refunded separately).
+- First run baselines existing `Transaction.all` history without sending events.
+- The tracker **never** calls `transaction.finish()` — your app owns finishing.
+- Sandbox / Xcode transactions include `store_environment` so the server can filter.
+
 ## What's new (v0.9.0)
 
 - **Hardware device context on every event.** `GrowthDeviceIdentifiers` now attaches raw
