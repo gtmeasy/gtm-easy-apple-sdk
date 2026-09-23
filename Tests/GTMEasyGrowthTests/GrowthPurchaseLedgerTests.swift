@@ -140,6 +140,57 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
 
   // MARK: - Concurrency
 
+  func testConcurrentMarkSentPersistsAllFiftyIds() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let records = (0..<50).map { i in
+      record(id: "tx-\(i)", purchaseDate: Date(timeIntervalSince1970: Double(1_000 + i)))
+    }
+    _ = await ledger.pending(records)
+
+    await withTaskGroup(of: Void.self) { group in
+      for rec in records {
+        group.addTask {
+          await ledger.markSent(.completed(rec))
+        }
+      }
+    }
+
+    let ledger2 = GrowthPurchaseLedger(defaults: defaults)
+    let persistedPending = await ledger2.pending(records)
+    XCTAssertTrue(persistedPending.isEmpty)
+  }
+
+  func testConcurrentPendingAndMarkSentNeverDuplicate() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let rec = record(id: "tx-race")
+
+    let results = await withTaskGroup(of: String?.self) { group in
+      for _ in 0..<20 {
+        group.addTask {
+          let pending = await ledger.pending([rec])
+          guard let action = pending.first else { return nil }
+          if case .completed = action {
+            await ledger.markSent(action)
+            if case .completed(let record) = action { return record.transactionId }
+          }
+          return nil
+        }
+      }
+      var ids: [String] = []
+      for await id in group { if let id { ids.append(id) } }
+      return ids
+    }
+
+    XCTAssertEqual(Set(results).count, results.count)
+    XCTAssertLessThanOrEqual(results.count, 1)
+    let finalPending = await ledger.pending([rec])
+    XCTAssertTrue(finalPending.isEmpty)
+  }
+
   func testConcurrentPendingNeverReturnsSameIdTwice() async {
     let defaults = freshDefaults()
     let ledger = GrowthPurchaseLedger(defaults: defaults)
@@ -267,7 +318,7 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
 
   // MARK: - Consent at send boundary
 
-  func testProcessorDisabledMarksSentWithoutSending() async {
+  func testProcessorDisabledMarksSuppressedWithoutSending() async {
     let defaults = freshDefaults()
     let ledger = GrowthPurchaseLedger(defaults: defaults)
     await ledger.baseline(with: [])
@@ -277,7 +328,7 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
     var sent = 0
     await GrowthPurchaseActionProcessor.process(
       actions: [action],
-      isEnabled: { false },
+      isEnabled: { _ in false },
       send: { _ in sent += 1 },
       ledger: ledger
     )
@@ -285,6 +336,64 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
     XCTAssertEqual(sent, 0)
     let pending = await ledger.pending([record()])
     XCTAssertTrue(pending.isEmpty)
+  }
+
+  func testSuppressedCompletionThenRevocationNoRefund() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let sale = record(id: "tx-suppressed")
+    _ = await ledger.pending([sale])
+    await GrowthPurchaseActionProcessor.process(
+      actions: [.completed(sale)],
+      isEnabled: { _ in false },
+      send: { _ in },
+      ledger: ledger
+    )
+
+    let revoked = record(id: "tx-suppressed", revoked: true)
+    let pending = await ledger.pending([revoked])
+    XCTAssertTrue(pending.isEmpty)
+  }
+
+  func testRecordAwareConsentSuppressesByPurchaseDateEvenWhenEnabledNow() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let disabledStart = Date(timeIntervalSince1970: 1_700_000_000)
+    let disabledEnd = Date(timeIntervalSince1970: 1_700_200_000)
+    let duringDisabled = record(
+      id: "tx-disabled",
+      purchaseDate: Date(timeIntervalSince1970: 1_700_100_000)
+    )
+    _ = await ledger.pending([duringDisabled])
+
+    var sent: [String] = []
+    await GrowthPurchaseActionProcessor.process(
+      actions: [.completed(duringDisabled)],
+      isEnabled: { record in
+        let t = record.purchaseDate
+        return t < disabledStart || t >= disabledEnd
+      },
+      send: { action in
+        if case .completed(let record) = action {
+          sent.append(record.transactionId)
+        }
+      },
+      ledger: ledger
+    )
+
+    XCTAssertTrue(sent.isEmpty)
+    let afterSuppress = await ledger.pending([duringDisabled])
+    XCTAssertTrue(afterSuppress.isEmpty)
+    let revoked = record(
+      id: "tx-disabled",
+      revoked: true,
+      purchaseDate: Date(timeIntervalSince1970: 1_700_100_000),
+      revocationDate: Date(timeIntervalSince1970: 1_700_300_000)
+    )
+    let afterRevocation = await ledger.pending([revoked])
+    XCTAssertTrue(afterRevocation.isEmpty)
   }
 
   func testProcessorRechecksConsentPerAction() async {
@@ -299,7 +408,7 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
     let enabledGate = ProcessorGate(initial: true)
     await GrowthPurchaseActionProcessor.process(
       actions: [first, second],
-      isEnabled: {
+      isEnabled: { _ in
         await enabledGate.take()
       },
       send: { action in

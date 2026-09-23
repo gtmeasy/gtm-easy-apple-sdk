@@ -13,7 +13,12 @@ The SDK sends events to the GTM Easy ingestion API, identifies users, persists a
 ```swift
 let purchases = GrowthPurchaseTracker(
   analytics: analytics,
-  isEnabled: { await consentStore.analyticsEnabled }
+  isEnabled: { record in
+    await consentStore.allowsPurchaseTracking(
+      at: record.purchaseDate,
+      revocationDate: record.revocationDate
+    )
+  }
 )
 await purchases.start()                  // at launch, after analytics is configured
 // after Product.purchase():
@@ -25,10 +30,11 @@ await purchases.sync()
 Rules:
 - Each transaction is reported at most once (completed + refunded separately).
 - First run baselines existing `Transaction.all` history without sending events.
-- Pass `isEnabled` for host consent — when it returns `false`, actions are marked sent
-  without emitting events (permanently suppressed; opting back in does not report them
-  retroactively). Toggle `isEnabled` instead of calling `stop()`/`start()` on preference
-  changes.
+- Pass `isEnabled` per record — decide from `record.purchaseDate` (and `record.revocationDate`
+  for refunds) whether tracking was allowed then and is allowed now. Suppressed sales are
+  never sent and their refunds are suppressed too. Toggle consent through `isEnabled` instead
+  of `stop()`/`start()`. The send-time window between the consent check and the HTTP request
+  matches every other `track` call (no transport-level consent switch yet).
 - The tracker **never** calls `transaction.finish()` — your app owns finishing.
 - Sandbox / Xcode transactions include `store_environment` so the server can filter.
 

@@ -12,16 +12,17 @@ import StoreKit
 /// is granted.
 ///
 /// Refunds send a negative `metricValue` so revenue metrics net out. Pass
-/// `isEnabled` to gate sends on host consent — when it returns `false`, actions
-/// are marked sent without emitting events (permanently suppressed; opting back
-/// in does not report them retroactively). Prefer toggling `isEnabled` over
-/// `stop()`/`start()` when consent changes; use `stop()` only to cancel the
-/// `Transaction.updates` listener.
+/// `isEnabled` to gate sends per record — the closure should reflect whether
+/// tracking was allowed at the transaction time (and for refunds at revocation
+/// time) and is still allowed now. When it returns `false` for a completion, the
+/// sale is permanently suppressed and its refund is never sent either. Prefer
+/// toggling consent through `isEnabled` over `stop()`/`start()`; use `stop()`
+/// only to cancel the `Transaction.updates` listener.
 @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
 public actor GrowthPurchaseTracker {
   private let analytics: GrowthAnalytics
   private let ledger: GrowthPurchaseLedger
-  private let isEnabled: @Sendable () async -> Bool
+  private let isEnabled: @Sendable (GrowthPurchaseRecord) async -> Bool
   private let startedAt: Date
   private var updatesTask: Task<Void, Never>?
   private var startTask: Task<Void, Never>?
@@ -30,12 +31,20 @@ public actor GrowthPurchaseTracker {
   public init(
     analytics: GrowthAnalytics,
     defaults: UserDefaults = .standard,
-    isEnabled: @escaping @Sendable () async -> Bool = { true }
+    isEnabled: @escaping @Sendable (GrowthPurchaseRecord) async -> Bool = { _ in true }
   ) {
     self.analytics = analytics
     self.ledger = GrowthPurchaseLedger(defaults: defaults)
     self.isEnabled = isEnabled
     self.startedAt = Date()
+  }
+
+  public init(
+    analytics: GrowthAnalytics,
+    defaults: UserDefaults = .standard,
+    isEnabled: @escaping @Sendable () async -> Bool
+  ) {
+    self.init(analytics: analytics, defaults: defaults, isEnabled: { _ in await isEnabled() })
   }
 
   /// Baselines on first run, starts the `Transaction.updates` listener, then
@@ -120,7 +129,12 @@ public actor GrowthPurchaseTracker {
   private func processRecords(_ records: [GrowthPurchaseRecord]) async {
     guard !stopped else { return }
     let actions = await ledger.pending(records)
-    guard !stopped else { return }
+    guard !stopped else {
+      for action in actions {
+        await ledger.releaseInFlight(action)
+      }
+      return
+    }
     await GrowthPurchaseActionProcessor.process(
       actions: actions,
       isEnabled: isEnabled,

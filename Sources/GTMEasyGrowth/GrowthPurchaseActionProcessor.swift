@@ -4,24 +4,35 @@ import Foundation
 enum GrowthPurchaseActionProcessor {
   static func process(
     actions: [GrowthPurchaseAction],
-    isEnabled: @Sendable () async -> Bool = { true },
+    isEnabled: @Sendable (GrowthPurchaseRecord) async -> Bool = { _ in true },
     shouldContinue: @Sendable () async -> Bool = { true },
     send: (GrowthPurchaseAction) async throws -> Void,
     ledger: GrowthPurchaseLedger
   ) async {
     var failedCompletedIds: Set<String> = []
-    for action in actions {
+    for index in actions.indices {
+      let action = actions[index]
       guard await shouldContinue() else {
-        await ledger.releaseInFlight(action)
-        continue
+        for remaining in actions[index...] {
+          await ledger.releaseInFlight(remaining)
+        }
+        return
       }
       if case .refunded(let record) = action, failedCompletedIds.contains(record.transactionId) {
         await ledger.releaseInFlight(action)
         continue
       }
-      if !(await isEnabled()) {
-        await ledger.markSent(action)
-        continue
+      switch action {
+      case .completed(let record):
+        if !(await isEnabled(record)) {
+          await ledger.markSuppressed(record)
+          continue
+        }
+      case .refunded(let record):
+        if !(await isEnabled(record)) {
+          await ledger.markSent(action)
+          continue
+        }
       }
       do {
         try await send(action)

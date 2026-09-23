@@ -161,7 +161,12 @@ Opt-in automatic purchase events — once per transaction, no historical backfil
 ```swift
 let purchases = GrowthPurchaseTracker(
   analytics: GrowthClient.analytics,
-  isEnabled: { await consentStore.analyticsEnabled }
+  isEnabled: { record in
+    await consentStore.allowsPurchaseTracking(
+      at: record.purchaseDate,
+      revocationDate: record.revocationDate
+    )
+  }
 )
 await purchases.start()                  // launch, after analytics is configured
 // after Product.purchase():
@@ -171,9 +176,10 @@ await purchases.sync()
 ```
 
 - First run baselines `Transaction.all` without sending — existing customers are not reported as new sales.
-- Pass `isEnabled` for host consent — when `false`, actions are marked sent without emitting
-  events (permanently suppressed; opting back in does not report them retroactively). Toggle
-  `isEnabled` instead of `stop()`/`start()` on preference changes.
+- `isEnabled` is per record — use `record.purchaseDate` (and `record.revocationDate` for
+  refunds) to decide if tracking was allowed then and now. Suppressed sales never send and
+  their refunds are suppressed too. Toggle consent via `isEnabled`, not `stop()`/`start()`.
+  Send-time consent matches other `track` calls (no transport-level switch yet).
 - Never calls `transaction.finish()` — finish in your purchase flow after granting entitlement.
 - Refunds send negative `metricValue` so revenue MVs net out.
 - Sandbox/Xcode transactions include `store_environment` for server-side filtering.
