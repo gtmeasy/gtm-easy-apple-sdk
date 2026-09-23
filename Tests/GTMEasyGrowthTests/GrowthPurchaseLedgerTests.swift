@@ -13,9 +13,13 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
   private func record(
     id: String = "tx-1",
     revoked: Bool = false,
-    productId: String = "pro_yearly"
+    productId: String = "pro_yearly",
+    purchaseDate: Date? = nil,
+    revocationDate: Date? = nil
   ) -> GrowthPurchaseRecord {
-    GrowthPurchaseRecord(
+    let resolvedPurchase = purchaseDate ?? self.purchaseDate
+    let resolvedRevocation = revoked ? (revocationDate ?? self.revocationDate) : nil
+    return GrowthPurchaseRecord(
       transactionId: id,
       originalTransactionId: "orig-\(id)",
       productId: productId,
@@ -24,8 +28,8 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
       price: Decimal(string: "9.99"),
       currency: "USD",
       storefront: "USA",
-      purchaseDate: purchaseDate,
-      revocationDate: revoked ? revocationDate : nil
+      purchaseDate: resolvedPurchase,
+      revocationDate: resolvedRevocation
     )
   }
 
@@ -145,22 +149,61 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
     XCTAssertEqual(completedIds.count, 1)
   }
 
-  // MARK: - Cap trimming
+  // MARK: - Cap trimming + watermarks
 
-  func testCapTrimmingKeepsNewest500() async {
+  func testBaseline600RecordsNonePending() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    let records = (0..<600).map { i in
+      record(id: "tx-\(i)", purchaseDate: Date(timeIntervalSince1970: Double(i)))
+    }
+    await ledger.baseline(with: records)
+    let pending = await ledger.pending(records)
+    XCTAssertTrue(pending.isEmpty)
+  }
+
+  func testTrimDuringMarkSentTrimmedRecordNotReturnedAgain() async {
     let defaults = freshDefaults()
     let ledger = GrowthPurchaseLedger(defaults: defaults)
     await ledger.baseline(with: [])
 
     for i in 0..<510 {
-      let action = GrowthPurchaseAction.completed(record(id: "tx-\(i)"))
-      _ = await ledger.pending([record(id: "tx-\(i)")])
+      let rec = record(id: "tx-\(i)", purchaseDate: Date(timeIntervalSince1970: Double(i)))
+      let action = GrowthPurchaseAction.completed(rec)
+      _ = await ledger.pending([rec])
       await ledger.markSent(action)
     }
 
-    // Oldest ids (0-9) should have been trimmed; re-adding tx-0 should fire again.
-    let pending = await ledger.pending([record(id: "tx-0")])
-    XCTAssertEqual(pending, [.completed(record(id: "tx-0"))])
+    let trimmed = record(id: "tx-0", purchaseDate: Date(timeIntervalSince1970: 0))
+    let pending = await ledger.pending([trimmed])
+    XCTAssertTrue(pending.isEmpty)
+  }
+
+  // MARK: - Processor ordering
+
+  func testCompletedFailureSkipsRefundInSameBatch() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let revoked = record(revoked: true)
+    let actions = await ledger.pending([revoked])
+    XCTAssertEqual(actions.count, 2)
+
+    var sent: [GrowthPurchaseAction] = []
+    await GrowthPurchaseActionProcessor.process(actions: actions, send: { action in
+      sent.append(action)
+      if case .completed = action {
+        throw NSError(domain: "test", code: 1)
+      }
+    }, ledger: ledger)
+
+    XCTAssertEqual(sent.count, 1)
+    if case .completed = sent[0] {} else {
+      XCTFail("expected completed first")
+    }
+
+    let retry = await ledger.pending([revoked])
+    XCTAssertEqual(retry, actions)
   }
 
   // MARK: - Properties

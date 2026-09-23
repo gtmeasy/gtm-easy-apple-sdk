@@ -83,26 +83,14 @@ public actor GrowthPurchaseTracker {
 
   private func processRecords(_ records: [GrowthPurchaseRecord]) async {
     let actions = await ledger.pending(records)
-    for action in actions {
-      do {
-        switch action {
-        case .completed(let record):
-          _ = try await analytics.trackPurchaseCompleted(record)
-        case .refunded(let record):
-          _ = try await analytics.trackPurchaseRefunded(record)
-        }
-        // Mark sent even when analytics is disabled (noop response) so we do
-        // not retry the same transaction on every sync.
-        await ledger.markSent(action)
-      } catch {
-        // Network failure — leave in-flight cleared only for un-sent actions.
-        // `markSent` was not called, so the in-flight guard is still held and
-        // the next `pending` will not double-send; however we must release
-        // in-flight for retry. Re-queue by not having called markSent — but
-        // inFlight blocks retry. Fix: on failure, release in-flight.
-        await ledger.releaseInFlight(action)
+    await GrowthPurchaseActionProcessor.process(actions: actions, send: { action in
+      switch action {
+      case .completed(let record):
+        _ = try await analytics.trackPurchaseCompleted(record)
+      case .refunded(let record):
+        _ = try await analytics.trackPurchaseRefunded(record)
       }
-    }
+    }, ledger: ledger)
   }
 
   // MARK: - StoreKit mapping

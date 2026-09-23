@@ -17,6 +17,10 @@ actor GrowthPurchaseLedger {
     static let baselined = "gtm_easy.purchases.baselined"
     static let completedIds = "gtm_easy.purchases.completed_ids"
     static let refundedIds = "gtm_easy.purchases.refunded_ids"
+    static let completedDates = "gtm_easy.purchases.completed_dates"
+    static let refundedDates = "gtm_easy.purchases.refunded_dates"
+    static let completedWatermark = "gtm_easy.purchases.completed_watermark"
+    static let refundedWatermark = "gtm_easy.purchases.refunded_watermark"
   }
 
   private static let maxStoredIds = 500
@@ -40,13 +44,35 @@ actor GrowthPurchaseLedger {
     guard !defaults.bool(forKey: Keys.baselined) else { return }
     var completed = loadIds(forKey: Keys.completedIds)
     var refunded = loadIds(forKey: Keys.refundedIds)
+    var completedDates = loadDates(forKey: Keys.completedDates)
+    var refundedDates = loadDates(forKey: Keys.refundedDates)
+    var completedWatermark = loadWatermark(forKey: Keys.completedWatermark)
+    var refundedWatermark = loadWatermark(forKey: Keys.refundedWatermark)
     for record in records {
-      appendId(record.transactionId, to: &completed)
+      appendCompleted(
+        record,
+        ids: &completed,
+        dates: &completedDates,
+        watermark: &completedWatermark
+      )
       if record.revocationDate != nil {
-        appendId(record.transactionId, to: &refunded)
+        appendRefunded(
+          record,
+          ids: &refunded,
+          dates: &refundedDates,
+          watermark: &refundedWatermark
+        )
       }
     }
-    await persist(baselined: true, completed: completed, refunded: refunded)
+    await persist(
+      baselined: true,
+      completed: completed,
+      refunded: refunded,
+      completedDates: completedDates,
+      refundedDates: refundedDates,
+      completedWatermark: completedWatermark,
+      refundedWatermark: refundedWatermark
+    )
   }
 
   /// Diff `records` against the ledger and return actions that still need to be
@@ -55,14 +81,21 @@ actor GrowthPurchaseLedger {
   func pending(_ records: [GrowthPurchaseRecord]) -> [GrowthPurchaseAction] {
     let completed = loadIds(forKey: Keys.completedIds)
     let refunded = loadIds(forKey: Keys.refundedIds)
+    let completedWatermark = loadWatermark(forKey: Keys.completedWatermark)
+    let refundedWatermark = loadWatermark(forKey: Keys.refundedWatermark)
     var actions: [GrowthPurchaseAction] = []
 
     for record in records {
       let id = record.transactionId
       let completedKey = Self.completedFlightKey(id)
       let refundedKey = Self.refundedFlightKey(id)
-      let alreadyCompleted = completed.contains(id) || inFlight.contains(completedKey)
-      let alreadyRefunded = refunded.contains(id) || inFlight.contains(refundedKey)
+      let purchaseEpoch = record.purchaseDate.timeIntervalSince1970
+      let alreadyCompleted = completed.contains(id)
+        || inFlight.contains(completedKey)
+        || (completedWatermark.map { purchaseEpoch <= $0 } ?? false)
+      let alreadyRefunded = refunded.contains(id)
+        || inFlight.contains(refundedKey)
+        || (record.revocationDate.map { $0.timeIntervalSince1970 <= (refundedWatermark ?? -.infinity) } ?? false)
 
       if !alreadyCompleted {
         actions.append(.completed(record))
@@ -92,20 +125,41 @@ actor GrowthPurchaseLedger {
   /// Record that an action was successfully sent (or intentionally skipped when
   /// analytics is disabled — see tracker docs). Clears the in-flight guard.
   func markSent(_ action: GrowthPurchaseAction) async {
-    let id: String
     switch action {
     case .completed(let record):
-      id = record.transactionId
+      let id = record.transactionId
       inFlight.remove(Self.completedFlightKey(id))
       var completed = loadIds(forKey: Keys.completedIds)
-      appendId(id, to: &completed)
-      await persist(completed: completed)
+      var completedDates = loadDates(forKey: Keys.completedDates)
+      var completedWatermark = loadWatermark(forKey: Keys.completedWatermark)
+      appendCompleted(
+        record,
+        ids: &completed,
+        dates: &completedDates,
+        watermark: &completedWatermark
+      )
+      await persist(
+        completed: completed,
+        completedDates: completedDates,
+        completedWatermark: completedWatermark
+      )
     case .refunded(let record):
-      id = record.transactionId
+      let id = record.transactionId
       inFlight.remove(Self.refundedFlightKey(id))
       var refunded = loadIds(forKey: Keys.refundedIds)
-      appendId(id, to: &refunded)
-      await persist(refunded: refunded)
+      var refundedDates = loadDates(forKey: Keys.refundedDates)
+      var refundedWatermark = loadWatermark(forKey: Keys.refundedWatermark)
+      appendRefunded(
+        record,
+        ids: &refunded,
+        dates: &refundedDates,
+        watermark: &refundedWatermark
+      )
+      await persist(
+        refunded: refunded,
+        refundedDates: refundedDates,
+        refundedWatermark: refundedWatermark
+      )
     }
   }
 
@@ -115,22 +169,75 @@ actor GrowthPurchaseLedger {
     defaults.stringArray(forKey: key) ?? []
   }
 
-  private func appendId(_ id: String, to list: inout [String]) {
-    if list.contains(id) { return }
-    list.append(id)
-    if list.count > Self.maxStoredIds {
-      list.removeFirst(list.count - Self.maxStoredIds)
+  private func loadDates(forKey key: String) -> [String: Double] {
+    defaults.dictionary(forKey: key) as? [String: Double] ?? [:]
+  }
+
+  private func loadWatermark(forKey key: String) -> Double? {
+    let value = defaults.double(forKey: key)
+    return value > 0 ? value : nil
+  }
+
+  private func appendCompleted(
+    _ record: GrowthPurchaseRecord,
+    ids: inout [String],
+    dates: inout [String: Double],
+    watermark: inout Double?
+  ) {
+    let id = record.transactionId
+    if ids.contains(id) { return }
+    let epoch = record.purchaseDate.timeIntervalSince1970
+    ids.append(id)
+    dates[id] = epoch
+    trimIds(&ids, dates: &dates, watermark: &watermark)
+  }
+
+  private func appendRefunded(
+    _ record: GrowthPurchaseRecord,
+    ids: inout [String],
+    dates: inout [String: Double],
+    watermark: inout Double?
+  ) {
+    guard let revocationDate = record.revocationDate else { return }
+    let id = record.transactionId
+    if ids.contains(id) { return }
+    let epoch = revocationDate.timeIntervalSince1970
+    ids.append(id)
+    dates[id] = epoch
+    trimIds(&ids, dates: &dates, watermark: &watermark)
+  }
+
+  private func trimIds(
+    _ ids: inout [String],
+    dates: inout [String: Double],
+    watermark: inout Double?
+  ) {
+    guard ids.count > Self.maxStoredIds else { return }
+    let trimCount = ids.count - Self.maxStoredIds
+    for trimmedId in ids.prefix(trimCount) {
+      if let trimmedEpoch = dates.removeValue(forKey: trimmedId) {
+        watermark = max(watermark ?? trimmedEpoch, trimmedEpoch)
+      }
     }
+    ids.removeFirst(trimCount)
   }
 
   private func persist(
     baselined: Bool? = nil,
     completed: [String]? = nil,
-    refunded: [String]? = nil
+    refunded: [String]? = nil,
+    completedDates: [String: Double]? = nil,
+    refundedDates: [String: Double]? = nil,
+    completedWatermark: Double? = nil,
+    refundedWatermark: Double? = nil
   ) async {
     let resolvedBaselined = baselined
     let resolvedCompleted = completed
     let resolvedRefunded = refunded
+    let resolvedCompletedDates = completedDates
+    let resolvedRefundedDates = refundedDates
+    let resolvedCompletedWatermark = completedWatermark
+    let resolvedRefundedWatermark = refundedWatermark
     await growthPersistOnMainAndWait { [defaults] in
       if let resolvedBaselined {
         defaults.set(resolvedBaselined, forKey: Keys.baselined)
@@ -140,6 +247,18 @@ actor GrowthPurchaseLedger {
       }
       if let resolvedRefunded {
         defaults.set(resolvedRefunded, forKey: Keys.refundedIds)
+      }
+      if let resolvedCompletedDates {
+        defaults.set(resolvedCompletedDates, forKey: Keys.completedDates)
+      }
+      if let resolvedRefundedDates {
+        defaults.set(resolvedRefundedDates, forKey: Keys.refundedDates)
+      }
+      if let resolvedCompletedWatermark {
+        defaults.set(resolvedCompletedWatermark, forKey: Keys.completedWatermark)
+      }
+      if let resolvedRefundedWatermark {
+        defaults.set(resolvedRefundedWatermark, forKey: Keys.refundedWatermark)
       }
     }
   }
