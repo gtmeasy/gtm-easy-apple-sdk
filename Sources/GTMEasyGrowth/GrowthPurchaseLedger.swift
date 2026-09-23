@@ -135,6 +135,12 @@ actor GrowthPurchaseLedger {
 
   /// Record that consent suppressed a completion — treated as completed so it is
   /// never sent as a sale; refunds for suppressed sales are also suppressed.
+  /// The sale was suppressed, so its refund must be suppressed too, even when it was queued in the same batch.
+  func isSuppressed(_ record: GrowthPurchaseRecord) -> Bool {
+    suppressedIds.contains(record.transactionId)
+      || (suppressedWatermark.map { record.purchaseDate.timeIntervalSince1970 <= $0 } ?? false)
+  }
+
   func markSuppressed(_ record: GrowthPurchaseRecord) async {
     let id = record.transactionId
     appendSuppressed(record)

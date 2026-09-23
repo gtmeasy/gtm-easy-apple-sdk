@@ -29,6 +29,11 @@ enum GrowthPurchaseActionProcessor {
           continue
         }
       case .refunded(let record):
+        let saleSuppressed = await ledger.isSuppressed(record)
+        if saleSuppressed {
+          await ledger.markSent(action)
+          continue
+        }
         if !(await isEnabled(record)) {
           await ledger.markSent(action)
           continue

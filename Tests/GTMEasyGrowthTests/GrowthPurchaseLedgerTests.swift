@@ -16,6 +16,18 @@ private actor ProcessorGate {
   }
 }
 
+private actor AnswerSequence {
+  private var answers: [Bool]
+
+  init(_ answers: [Bool]) {
+    self.answers = answers
+  }
+
+  func next() -> Bool {
+    answers.isEmpty ? true : answers.removeFirst()
+  }
+}
+
 final class GrowthPurchaseLedgerTests: XCTestCase {
   private func freshDefaults() -> UserDefaults {
     UserDefaults(suiteName: "GrowthPurchaseLedgerTests-\(UUID().uuidString)")!
@@ -421,6 +433,29 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
 
     XCTAssertEqual(sent, ["tx-1"])
     let pending = await ledger.pending([record(id: "tx-1"), record(id: "tx-2")])
+    XCTAssertTrue(pending.isEmpty)
+  }
+
+  func testQueuedRefundOfSuppressedSaleIsNotSentWhenConsentReturns() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let revoked = record(revoked: true)
+    let actions = await ledger.pending([revoked])
+    XCTAssertEqual(actions, [.completed(revoked), .refunded(revoked)])
+
+    // Consent is off for the sale, then back on for the queued refund.
+    let consent = AnswerSequence([false, true])
+    var sent: [GrowthPurchaseAction] = []
+    await GrowthPurchaseActionProcessor.process(
+      actions: actions,
+      isEnabled: { _ in await consent.next() },
+      send: { action in sent.append(action) },
+      ledger: ledger
+    )
+
+    XCTAssertTrue(sent.isEmpty)
+    let pending = await ledger.pending([revoked])
     XCTAssertTrue(pending.isEmpty)
   }
 
