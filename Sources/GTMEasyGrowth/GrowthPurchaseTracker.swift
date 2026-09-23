@@ -57,12 +57,14 @@ public actor GrowthPurchaseTracker {
   /// made by another SDK such as RevenueCat).
   public func sync() async {
     let records = await Self.allRecords()
+    guard await ensureBaselined(with: records) else { return }
     await processRecords(records)
   }
 
   /// Report one verified transaction immediately (e.g. the value returned by
   /// `Product.purchase()`). Unverified results are ignored.
   public func track(_ transaction: Transaction) async {
+    guard await ensureBaselined(with: await Self.allRecords()) else { return }
     await processRecords([Self.record(from: transaction)])
   }
 
@@ -80,6 +82,14 @@ public actor GrowthPurchaseTracker {
   }
 
   // MARK: - Internal
+
+  /// A host that calls `sync()` or `track(_:)` before `start()` must not report history as new
+  /// sales, so the first call baselines instead of sending. Returns `true` when already baselined.
+  private func ensureBaselined(with records: [GrowthPurchaseRecord]) async -> Bool {
+    if await ledger.isBaselined { return true }
+    await ledger.baseline(with: records)
+    return false
+  }
 
   private func processRecords(_ records: [GrowthPurchaseRecord]) async {
     let actions = await ledger.pending(records)
