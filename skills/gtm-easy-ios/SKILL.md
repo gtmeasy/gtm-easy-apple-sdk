@@ -154,6 +154,36 @@ try await analytics.trackPurchaseCompleted(amount: 49.99, currency: "USD", produ
 
 Also available: `trackPaywallUpgradeCancelled`, `trackPaywallClosed`, `trackTrialStarted`, `trackRestoreCompleted`.
 
+## 6b. StoreKit 2 purchase tracking (v0.10.0)
+
+Opt-in automatic purchase events — once per transaction, no historical backfill:
+
+```swift
+let purchases = GrowthPurchaseTracker(
+  analytics: GrowthClient.analytics,
+  isEnabled: { record in
+    await consentStore.allowsPurchaseTracking(
+      at: record.purchaseDate,
+      revocationDate: record.revocationDate
+    )
+  }
+)
+await purchases.start()                  // launch, after analytics is configured
+// after Product.purchase():
+await purchases.track(result)
+// on foreground / after restore or a purchase via another SDK (RevenueCat, etc.):
+await purchases.sync()
+```
+
+- First run baselines `Transaction.all` without sending — existing customers are not reported as new sales.
+- `isEnabled` is per record — use `record.purchaseDate` (and `record.revocationDate` for
+  refunds) to decide if tracking was allowed then and now. Suppressed sales never send and
+  their refunds are suppressed too. Toggle consent via `isEnabled`, not `stop()`/`start()`.
+  Send-time consent matches other `track` calls (no transport-level switch yet).
+- Never calls `transaction.finish()` — finish in your purchase flow after granting entitlement.
+- Refunds send negative `metricValue` so revenue MVs net out.
+- Sandbox/Xcode transactions include `store_environment` for server-side filtering.
+
 ## 7. SKAdNetwork 4.0
 
 ```swift

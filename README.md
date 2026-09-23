@@ -4,6 +4,40 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
 
+## What's new (v0.10.0)
+
+- **StoreKit 2 purchase tracking.** Opt-in `GrowthPurchaseTracker` sends
+  `purchase.completed` and `purchase.refunded` exactly once per transaction
+  through the existing analytics pipeline — no historical backfill on first run.
+
+```swift
+let purchases = GrowthPurchaseTracker(
+  analytics: analytics,
+  isEnabled: { record in
+    await consentStore.allowsPurchaseTracking(
+      at: record.purchaseDate,
+      revocationDate: record.revocationDate
+    )
+  }
+)
+await purchases.start()                  // at launch, after analytics is configured
+// after Product.purchase():
+await purchases.track(result)
+// on foreground / after a restore or a purchase made by another SDK:
+await purchases.sync()
+```
+
+Rules:
+- Each transaction is reported at most once (completed + refunded separately).
+- First run baselines existing `Transaction.all` history without sending events.
+- Pass `isEnabled` per record — decide from `record.purchaseDate` (and `record.revocationDate`
+  for refunds) whether tracking was allowed then and is allowed now. Suppressed sales are
+  never sent and their refunds are suppressed too. Toggle consent through `isEnabled` instead
+  of `stop()`/`start()`. The send-time window between the consent check and the HTTP request
+  matches every other `track` call (no transport-level consent switch yet).
+- The tracker **never** calls `transaction.finish()` — your app owns finishing.
+- Sandbox / Xcode transactions include `store_environment` so the server can filter.
+
 ## What's new (v0.9.0)
 
 - **Hardware device context on every event.** `GrowthDeviceIdentifiers` now attaches raw
