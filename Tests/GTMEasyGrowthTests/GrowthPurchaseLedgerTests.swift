@@ -179,6 +179,39 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
     XCTAssertTrue(pending.isEmpty)
   }
 
+  func testUnorderedBaselineTrimKeepsNewestSoWatermarkStaysBelowUnsent() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    let records = (0..<600).reversed().map { i in
+      record(id: "tx-\(i)", purchaseDate: Date(timeIntervalSince1970: Double(i)))
+    }
+    await ledger.baseline(with: Array(records))
+
+    let newer = record(id: "tx-new", purchaseDate: Date(timeIntervalSince1970: 1_000))
+    let pending = await ledger.pending([newer])
+    XCTAssertEqual(pending, [.completed(newer)])
+  }
+
+  func testTrimAfterOutOfOrderSendDoesNotSkipUnsentOlderRecord() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+
+    // A newest-dated record is sent first, then 500 older ones; trimming must drop an old one.
+    let newest = record(id: "tx-newest", purchaseDate: Date(timeIntervalSince1970: 10_000))
+    _ = await ledger.pending([newest])
+    await ledger.markSent(.completed(newest))
+    for i in 0..<500 {
+      let rec = record(id: "tx-\(i)", purchaseDate: Date(timeIntervalSince1970: Double(100 + i)))
+      _ = await ledger.pending([rec])
+      await ledger.markSent(.completed(rec))
+    }
+
+    let unsent = record(id: "tx-unsent", purchaseDate: Date(timeIntervalSince1970: 5_000))
+    let pending = await ledger.pending([unsent])
+    XCTAssertEqual(pending, [.completed(unsent)])
+  }
+
   // MARK: - Processor ordering
 
   func testCompletedFailureSkipsRefundInSameBatch() async {

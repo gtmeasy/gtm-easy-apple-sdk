@@ -214,6 +214,9 @@ actor GrowthPurchaseLedger {
   ) {
     guard ids.count > Self.maxStoredIds else { return }
     let trimCount = ids.count - Self.maxStoredIds
+    // Drop the oldest dates, not the oldest inserts: `Transaction.all` is unordered, and the
+    // watermark must never pass a transaction that is still unsent.
+    ids.sort { (dates[$0] ?? 0) < (dates[$1] ?? 0) }
     for trimmedId in ids.prefix(trimCount) {
       if let trimmedEpoch = dates.removeValue(forKey: trimmedId) {
         watermark = max(watermark ?? trimmedEpoch, trimmedEpoch)
