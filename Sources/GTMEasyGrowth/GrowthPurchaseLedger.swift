@@ -38,9 +38,10 @@ actor GrowthPurchaseLedger {
     defaults.bool(forKey: Keys.baselined)
   }
 
-  /// First run only: mark every record as completed (and revoked ones as
-  /// refunded) without emitting events. Idempotent once `baselined` is set.
-  func baseline(with records: [GrowthPurchaseRecord]) async {
+  /// First run only: mark records before `cutoff` as completed (and revoked ones
+  /// with `revocationDate < cutoff` as refunded) without emitting events.
+  /// Records at/after the cutoff stay pending. Idempotent once `baselined` is set.
+  func baseline(with records: [GrowthPurchaseRecord], cutoff: Date = .distantFuture) async {
     guard !defaults.bool(forKey: Keys.baselined) else { return }
     var completed = loadIds(forKey: Keys.completedIds)
     var refunded = loadIds(forKey: Keys.refundedIds)
@@ -49,13 +50,15 @@ actor GrowthPurchaseLedger {
     var completedWatermark = loadWatermark(forKey: Keys.completedWatermark)
     var refundedWatermark = loadWatermark(forKey: Keys.refundedWatermark)
     for record in records {
-      appendCompleted(
-        record,
-        ids: &completed,
-        dates: &completedDates,
-        watermark: &completedWatermark
-      )
-      if record.revocationDate != nil {
+      if record.purchaseDate < cutoff {
+        appendCompleted(
+          record,
+          ids: &completed,
+          dates: &completedDates,
+          watermark: &completedWatermark
+        )
+      }
+      if let revocationDate = record.revocationDate, revocationDate < cutoff {
         appendRefunded(
           record,
           ids: &refunded,

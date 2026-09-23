@@ -2,6 +2,20 @@ import Foundation
 import XCTest
 @testable import GTMEasyGrowth
 
+private actor ProcessorGate {
+  private var allowsNext = false
+
+  init(initial: Bool) {
+    allowsNext = initial
+  }
+
+  func take() -> Bool {
+    guard allowsNext else { return false }
+    allowsNext = false
+    return true
+  }
+}
+
 final class GrowthPurchaseLedgerTests: XCTestCase {
   private func freshDefaults() -> UserDefaults {
     UserDefaults(suiteName: "GrowthPurchaseLedgerTests-\(UUID().uuidString)")!
@@ -213,6 +227,121 @@ final class GrowthPurchaseLedgerTests: XCTestCase {
   }
 
   // MARK: - Processor ordering
+
+  // MARK: - Baseline cutoff
+
+  func testBaselineBeforeCutoffNotPendingAfterCutoffIs() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    let cutoff = Date(timeIntervalSince1970: 1_700_050_000)
+    let before = record(id: "tx-old", purchaseDate: Date(timeIntervalSince1970: 1_700_000_000))
+    let after = record(id: "tx-new", purchaseDate: Date(timeIntervalSince1970: 1_700_100_000))
+    await ledger.baseline(with: [before, after], cutoff: cutoff)
+
+    let pending = await ledger.pending([before, after])
+    XCTAssertTrue(pending.isEmpty == false)
+    XCTAssertEqual(pending, [.completed(after)])
+  }
+
+  func testBaselineRefundBeforeCutoffNotPendingAfterCutoffIs() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    let cutoff = Date(timeIntervalSince1970: 1_700_100_000)
+    let oldRevoked = record(
+      id: "tx-old-revoked",
+      revoked: true,
+      purchaseDate: Date(timeIntervalSince1970: 1_700_000_000),
+      revocationDate: Date(timeIntervalSince1970: 1_700_050_000)
+    )
+    let newRevoked = record(
+      id: "tx-new-revoked",
+      revoked: true,
+      purchaseDate: Date(timeIntervalSince1970: 1_700_150_000),
+      revocationDate: Date(timeIntervalSince1970: 1_700_200_000)
+    )
+    await ledger.baseline(with: [oldRevoked, newRevoked], cutoff: cutoff)
+
+    let pending = await ledger.pending([oldRevoked, newRevoked])
+    XCTAssertEqual(pending, [.completed(newRevoked), .refunded(newRevoked)])
+  }
+
+  // MARK: - Consent at send boundary
+
+  func testProcessorDisabledMarksSentWithoutSending() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let action = GrowthPurchaseAction.completed(record())
+    _ = await ledger.pending([record()])
+
+    var sent = 0
+    await GrowthPurchaseActionProcessor.process(
+      actions: [action],
+      isEnabled: { false },
+      send: { _ in sent += 1 },
+      ledger: ledger
+    )
+
+    XCTAssertEqual(sent, 0)
+    let pending = await ledger.pending([record()])
+    XCTAssertTrue(pending.isEmpty)
+  }
+
+  func testProcessorRechecksConsentPerAction() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let first = GrowthPurchaseAction.completed(record(id: "tx-1"))
+    let second = GrowthPurchaseAction.completed(record(id: "tx-2"))
+    _ = await ledger.pending([record(id: "tx-1"), record(id: "tx-2")])
+
+    var sent: [String] = []
+    let enabledGate = ProcessorGate(initial: true)
+    await GrowthPurchaseActionProcessor.process(
+      actions: [first, second],
+      isEnabled: {
+        await enabledGate.take()
+      },
+      send: { action in
+        if case .completed(let record) = action {
+          sent.append(record.transactionId)
+        }
+      },
+      ledger: ledger
+    )
+
+    XCTAssertEqual(sent, ["tx-1"])
+    let pending = await ledger.pending([record(id: "tx-1"), record(id: "tx-2")])
+    XCTAssertTrue(pending.isEmpty)
+  }
+
+  func testProcessorStoppedDoesNotSendOrMarkSent() async {
+    let defaults = freshDefaults()
+    let ledger = GrowthPurchaseLedger(defaults: defaults)
+    await ledger.baseline(with: [])
+    let first = GrowthPurchaseAction.completed(record(id: "tx-1"))
+    let second = GrowthPurchaseAction.completed(record(id: "tx-2"))
+    _ = await ledger.pending([record(id: "tx-1"), record(id: "tx-2")])
+
+    var sent: [String] = []
+    let continueGate = ProcessorGate(initial: true)
+    await GrowthPurchaseActionProcessor.process(
+      actions: [first, second],
+      shouldContinue: {
+        await continueGate.take()
+      },
+      send: { action in
+        if case .completed(let record) = action {
+          sent.append(record.transactionId)
+        }
+      },
+      ledger: ledger
+    )
+
+    XCTAssertEqual(sent, ["tx-1"])
+    let pending = await ledger.pending([record(id: "tx-1"), record(id: "tx-2")])
+    XCTAssertEqual(pending, [second])
+  }
 
   func testCompletedFailureSkipsRefundInSameBatch() async {
     let defaults = freshDefaults()

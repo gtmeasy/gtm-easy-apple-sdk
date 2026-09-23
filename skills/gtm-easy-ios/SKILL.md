@@ -159,7 +159,10 @@ Also available: `trackPaywallUpgradeCancelled`, `trackPaywallClosed`, `trackTria
 Opt-in automatic purchase events — once per transaction, no historical backfill:
 
 ```swift
-let purchases = GrowthPurchaseTracker(analytics: GrowthClient.analytics)
+let purchases = GrowthPurchaseTracker(
+  analytics: GrowthClient.analytics,
+  isEnabled: { await consentStore.analyticsEnabled }
+)
 await purchases.start()                  // launch, after analytics is configured
 // after Product.purchase():
 await purchases.track(result)
@@ -168,6 +171,9 @@ await purchases.sync()
 ```
 
 - First run baselines `Transaction.all` without sending — existing customers are not reported as new sales.
+- Pass `isEnabled` for host consent — when `false`, actions are marked sent without emitting
+  events (permanently suppressed; opting back in does not report them retroactively). Toggle
+  `isEnabled` instead of `stop()`/`start()` on preference changes.
 - Never calls `transaction.finish()` — finish in your purchase flow after granting entitlement.
 - Refunds send negative `metricValue` so revenue MVs net out.
 - Sandbox/Xcode transactions include `store_environment` for server-side filtering.

@@ -4,13 +4,23 @@ import Foundation
 enum GrowthPurchaseActionProcessor {
   static func process(
     actions: [GrowthPurchaseAction],
+    isEnabled: @Sendable () async -> Bool = { true },
+    shouldContinue: @Sendable () async -> Bool = { true },
     send: (GrowthPurchaseAction) async throws -> Void,
     ledger: GrowthPurchaseLedger
   ) async {
     var failedCompletedIds: Set<String> = []
     for action in actions {
+      guard await shouldContinue() else {
+        await ledger.releaseInFlight(action)
+        continue
+      }
       if case .refunded(let record) = action, failedCompletedIds.contains(record.transactionId) {
         await ledger.releaseInFlight(action)
+        continue
+      }
+      if !(await isEnabled()) {
+        await ledger.markSent(action)
         continue
       }
       do {

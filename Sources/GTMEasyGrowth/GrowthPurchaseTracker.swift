@@ -11,45 +11,55 @@ import StoreKit
 /// `transaction.finish()` — call it from your purchase flow after entitlement
 /// is granted.
 ///
-/// Refunds send a negative `metricValue` so revenue metrics net out. When
-/// analytics is disabled (`configuration.disabled`), events are not sent but
-/// actions are still marked sent so the ledger does not retry forever.
+/// Refunds send a negative `metricValue` so revenue metrics net out. Pass
+/// `isEnabled` to gate sends on host consent — when it returns `false`, actions
+/// are marked sent without emitting events (permanently suppressed; opting back
+/// in does not report them retroactively). Prefer toggling `isEnabled` over
+/// `stop()`/`start()` when consent changes; use `stop()` only to cancel the
+/// `Transaction.updates` listener.
 @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
 public actor GrowthPurchaseTracker {
   private let analytics: GrowthAnalytics
   private let ledger: GrowthPurchaseLedger
+  private let isEnabled: @Sendable () async -> Bool
+  private let startedAt: Date
   private var updatesTask: Task<Void, Never>?
-  private var started = false
+  private var startTask: Task<Void, Never>?
+  private var stopped = false
 
-  public init(analytics: GrowthAnalytics, defaults: UserDefaults = .standard) {
+  public init(
+    analytics: GrowthAnalytics,
+    defaults: UserDefaults = .standard,
+    isEnabled: @escaping @Sendable () async -> Bool = { true }
+  ) {
     self.analytics = analytics
     self.ledger = GrowthPurchaseLedger(defaults: defaults)
+    self.isEnabled = isEnabled
+    self.startedAt = Date()
   }
 
   /// Baselines on first run, starts the `Transaction.updates` listener, then
-  /// runs one `sync()`. Idempotent — calling twice does not start two listeners.
+  /// runs one `sync()`. Overlapping calls share one listener and one baseline.
   public func start() async {
-    guard !started else {
+    stopped = false
+    if let task = startTask {
+      await task.value
       await sync()
       return
     }
-    started = true
-    let records = await Self.allRecords()
-    await ledger.baseline(with: records)
-    updatesTask = Task { [weak self] in
-      for await result in Transaction.updates {
-        guard case .verified(let transaction) = result else { continue }
-        await self?.processRecords([Self.record(from: transaction)])
-      }
-    }
-    await sync()
+    let task = Task { await self.performStart() }
+    startTask = task
+    await task.value
   }
 
-  /// Cancel the `Transaction.updates` listener. `sync()` remains callable.
+  /// Cancel the `Transaction.updates` listener. In-flight `start()`/`sync()`
+  /// stop sending; `sync()` remains callable after `stop()`.
   public func stop() {
+    stopped = true
     updatesTask?.cancel()
     updatesTask = nil
-    started = false
+    startTask?.cancel()
+    startTask = nil
   }
 
   /// Diff `Transaction.all` against the ledger and send what is missing. Call on
@@ -87,20 +97,44 @@ public actor GrowthPurchaseTracker {
   /// sales, so the first call baselines instead of sending. Returns `true` when already baselined.
   private func ensureBaselined(with records: [GrowthPurchaseRecord]) async -> Bool {
     if await ledger.isBaselined { return true }
-    await ledger.baseline(with: records)
+    await ledger.baseline(with: records, cutoff: startedAt)
     return false
   }
 
-  private func processRecords(_ records: [GrowthPurchaseRecord]) async {
-    let actions = await ledger.pending(records)
-    await GrowthPurchaseActionProcessor.process(actions: actions, send: { action in
-      switch action {
-      case .completed(let record):
-        _ = try await analytics.trackPurchaseCompleted(record)
-      case .refunded(let record):
-        _ = try await analytics.trackPurchaseRefunded(record)
+  private func performStart() async {
+    let records = await Self.allRecords()
+    await ledger.baseline(with: records, cutoff: startedAt)
+    if updatesTask == nil, !stopped {
+      updatesTask = Task { [weak self] in
+        for await result in Transaction.updates {
+          guard case .verified(let transaction) = result else { continue }
+          await self?.processRecords([Self.record(from: transaction)])
+        }
       }
-    }, ledger: ledger)
+    }
+    await sync()
+  }
+
+  private func shouldContinueProcessing() -> Bool { !stopped }
+
+  private func processRecords(_ records: [GrowthPurchaseRecord]) async {
+    guard !stopped else { return }
+    let actions = await ledger.pending(records)
+    guard !stopped else { return }
+    await GrowthPurchaseActionProcessor.process(
+      actions: actions,
+      isEnabled: isEnabled,
+      shouldContinue: { await self.shouldContinueProcessing() },
+      send: { action in
+        switch action {
+        case .completed(let record):
+          _ = try await analytics.trackPurchaseCompleted(record)
+        case .refunded(let record):
+          _ = try await analytics.trackPurchaseRefunded(record)
+        }
+      },
+      ledger: ledger
+    )
   }
 
   // MARK: - StoreKit mapping
