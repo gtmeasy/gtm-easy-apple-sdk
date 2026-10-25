@@ -11,7 +11,8 @@ import UIKit
 ///
 /// Collects:
 /// - **IDFV** — first-party vendor identifier (not IDFA; no ATT required)
-/// - **Raw hardware model** — `utsname.machine` (e.g. `iPhone17,1`). The server
+/// - **Raw hardware model** — `utsname.machine` (e.g. `iPhone17,1`), or
+///   `hw.model` on macOS (e.g. `Mac15,3`). The server
 ///   maps this to a marketing name (`iPhone 16 Pro`) for Discord / dashboards;
 ///   clients must not maintain that table.
 /// - **OS version**, **manufacturer** (`Apple`), **physical memory bytes**
@@ -42,9 +43,13 @@ public actor GrowthDeviceIdentifiers {
     #endif
   }
 
-  /// Raw hardware identifier from `uname` (e.g. `iPhone17,1`, `iPad14,1`).
-  /// Simulators typically report `arm64` / `x86_64`.
+  /// Raw hardware identifier (e.g. `iPhone17,1`, `iPad14,1`, `Mac15,3`).
+  /// On macOS `uname` only reports the CPU arch (`arm64`), so read
+  /// `hw.model` instead. Simulators typically report `arm64` / `x86_64`.
   private func readMachineIdentifier() -> String? {
+    #if os(macOS) || targetEnvironment(macCatalyst)
+    if let model = readSysctlString("hw.model") { return model }
+    #endif
     var systemInfo = utsname()
     guard uname(&systemInfo) == 0 else { return nil }
     return withUnsafePointer(to: &systemInfo.machine) {
@@ -53,6 +58,15 @@ public actor GrowthDeviceIdentifiers {
         return raw.isEmpty ? nil : raw
       }
     }
+  }
+
+  private func readSysctlString(_ name: String) -> String? {
+    var size = 0
+    guard sysctlbyname(name, nil, &size, nil, 0) == 0, size > 0 else { return nil }
+    var buffer = [CChar](repeating: 0, count: size)
+    guard sysctlbyname(name, &buffer, &size, nil, 0) == 0 else { return nil }
+    let value = String(cString: buffer)
+    return value.isEmpty ? nil : value
   }
 
   private func readOSVersion() -> String {

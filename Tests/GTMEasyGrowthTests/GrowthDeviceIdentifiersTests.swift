@@ -34,4 +34,14 @@ final class GrowthDeviceIdentifiersTests: XCTestCase {
     XCTAssertNotNil(snap.physicalMemoryBytes)
     XCTAssertGreaterThan(snap.physicalMemoryBytes ?? 0, 0)
   }
+
+  #if os(macOS)
+  func testMacSnapshotReportsHardwareModelNotArch() async {
+    let snap = await GrowthDeviceIdentifiers.shared.snapshot()
+    let model = snap.deviceModel ?? ""
+    XCTAssertNotEqual(model, "arm64")
+    XCTAssertNotEqual(model, "x86_64")
+    XCTAssertTrue(model.contains("Mac"), "expected hw.model like Mac15,3, got \(model)")
+  }
+  #endif
 }

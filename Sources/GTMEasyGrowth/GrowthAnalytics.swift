@@ -332,7 +332,7 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.10.0"
+  public static let sdkVersion = "0.10.1"
 
   /// The configured environment. Read by `GrowthAutoInstrument` so its install probe can
   /// gate StoreKit checks to production.

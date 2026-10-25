@@ -4,7 +4,13 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
 
-## What's new (v0.10.0)
+## What's new (v0.10.1)
+
+- **macOS hardware model.** On macOS `_ctx.device_model` now carries
+  `hw.model` (e.g. `Mac15,3`) instead of the CPU arch (`arm64`), so the
+  server can show `MacBook Pro 14-inch (M3, 2023)` in install notifications.
+
+## v0.10.0
 
 - **StoreKit 2 purchase tracking.** Opt-in `GrowthPurchaseTracker` sends
   `purchase.completed` and `purchase.refunded` exactly once per transaction
