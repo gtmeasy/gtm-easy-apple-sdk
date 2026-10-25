@@ -22,6 +22,10 @@ import AppKit
 /// To suppress the one-time adoption spike when an app with an existing user base first
 /// ships the SDK, either pass a `StoreKitInstallProbe(firstTrackedAppVersion:)` or call
 /// `markInstalledBeforeTracking()` for users you already know are existing.
+///
+/// When `analytics.isSuppressed` (disabled, or a suppressed test build) the install probe
+/// and launch classification are skipped and nothing is persisted, so the first production
+/// launch on the same device still fires `app.first_open`.
 public actor GrowthAutoInstrument {
   private let analytics: GrowthAnalytics
   private let defaults: UserDefaults
@@ -80,6 +84,8 @@ public actor GrowthAutoInstrument {
   /// Call this in the release that first adds the SDK, for users you already know are
   /// existing (signed-in, has local data), to avoid counting them as new installs.
   public func markInstalledBeforeTracking() async {
+    // Suppressed builds must not leave install state behind for a later production build.
+    guard !analytics.isSuppressed else { return }
     await installState.markInstalledBeforeTracking(
       currentVersion: appVersionProvider(),
       currentBuild: buildNumberProvider()
@@ -87,6 +93,9 @@ public actor GrowthAutoInstrument {
   }
 
   private func resolveAndFireLaunch(environment: GrowthAnalyticsConfiguration.Environment) async {
+    // Before the probe and `resolveLaunch`, which persists first-open + baseline before
+    // sending — a suppressed send would otherwise "succeed" as a noop and burn the install.
+    guard !analytics.isSuppressed else { return }
     let version = appVersionProvider()
     let build = buildNumberProvider()
     // Pass the current value in `AppTransaction.originalAppVersion`'s key space so the probe can

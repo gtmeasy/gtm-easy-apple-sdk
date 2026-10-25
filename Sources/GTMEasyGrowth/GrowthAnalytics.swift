@@ -4,86 +4,9 @@ import Foundation
 import AdServices
 #endif
 
-public struct GrowthAnalyticsConfiguration {
-  // Sendable so `GrowthAnalytics.getEnvironment()` can return it across the actor
-  // boundary into `GrowthAutoInstrument` / the install probe without a Swift 6
-  // strict-concurrency data-race diagnostic. A raw-value enum is trivially Sendable.
-  public enum Environment: String, Sendable {
-    case production
-    case staging
-    case development
-  }
-
-  /// Production ingest host. Override `endpoint` only when running against a
-  /// self-hosted GTM Easy deployment or a local development server.
-  public static let defaultEndpoint = URL(string: "https://www.gtmeasy.com")!
-
-  public let app: String
-  public let endpoint: URL
-  public let writeKey: String
-  public let environment: Environment
-  public let userDefaults: UserDefaults
-  /// When true, every identify/track is mirrored to `GrowthDebugSink.shared`
-  /// before the network call and emitted on `GrowthDebugSink.notificationName`.
-  public let debug: Bool
-  /// When true, all network calls are suppressed and every method returns an
-  /// empty noop response. Use to disable tracking in development or CI
-  /// environments without removing SDK call sites from your code.
-  public let disabled: Bool
-
-  public init(
-    app: String,
-    writeKey: String,
-    endpoint: URL = GrowthAnalyticsConfiguration.defaultEndpoint,
-    environment: Environment = .production,
-    userDefaults: UserDefaults = .standard,
-    debug: Bool = false,
-    disabled: Bool = false
-  ) {
-    self.app = app
-    self.endpoint = endpoint
-    self.writeKey = writeKey
-    self.environment = environment
-    self.userDefaults = userDefaults
-    self.debug = debug
-    self.disabled = disabled
-  }
-
-  /// Source-compatible initializer for pre-default-endpoint call sites that
-  /// passed `endpoint` before `writeKey`. New code should use the primary
-  /// initializer and omit `endpoint` to pick up the production default.
-  @available(*, deprecated, message: "Use init(app:writeKey:endpoint:environment:userDefaults:) — endpoint defaults to https://www.gtmeasy.com")
-  public init(
-    app: String,
-    endpoint: URL,
-    writeKey: String,
-    environment: Environment = .production,
-    userDefaults: UserDefaults = .standard
-  ) {
-    self.init(app: app, writeKey: writeKey, endpoint: endpoint, environment: environment, userDefaults: userDefaults)
-  }
-}
-
-public struct GrowthIngestResponse: Decodable, Sendable {
-  public let event: GrowthEventRecord?
-  public let warnings: [String]?
-}
-
-public struct GrowthEventRecord: Decodable, Sendable {
-  public let id: String
-  public let eventName: String
-}
-
-public struct GrowthAttributionResponse: Decodable, Sendable {
-  public let event: GrowthEventRecord?
-  public let attribution: [String: GrowthJSONValue]?
-}
-
-public protocol GrowthHTTPSession: Sendable {
-  func data(for request: URLRequest) async throws -> (Data, URLResponse)
-}
-
-extension URLSession: GrowthHTTPSession {}
+#if canImport(os)
+import os
+#endif
 
 public actor GrowthAnalytics {
   private enum StorageKeys {
@@ -112,6 +35,15 @@ public actor GrowthAnalytics {
   private let encoder = JSONEncoder()
   private let decoder = JSONDecoder()
 
+  /// The build channel this process runs as: `configuration.buildChannel` when set,
+  /// otherwise the offline auto-detected channel (cached per process).
+  public nonisolated let resolvedBuildChannel: GrowthBuildChannel
+  /// True when `disabled`, or `suppressTestBuilds` and the channel is debug / TestFlight /
+  /// internal test. Suppressed instances make no network calls and write no durable SDK
+  /// state (identity, anonymous id, click ids, install state, purchase ledger), so a later
+  /// production build on the same device still reports its install and purchases.
+  public nonisolated let isSuppressed: Bool
+
   public init(
     configuration: GrowthAnalyticsConfiguration,
     session: GrowthHTTPSession = URLSession.shared,
@@ -119,19 +51,66 @@ public actor GrowthAnalytics {
     clickIdStore: GrowthClickIdStore? = nil,
     systemContext: GrowthSystemContextProviding = LiveGrowthSystemContextProvider.shared
   ) {
+    self.init(
+      configuration: configuration,
+      session: session,
+      deviceIdentifiers: deviceIdentifiers,
+      clickIdStore: clickIdStore,
+      systemContext: systemContext,
+      buildChannelProbes: nil
+    )
+  }
+
+  /// Test seam: `buildChannelProbes` replaces the cached live detection when non-nil.
+  init(
+    configuration: GrowthAnalyticsConfiguration,
+    session: GrowthHTTPSession = URLSession.shared,
+    deviceIdentifiers: GrowthDeviceIdentifiers = .shared,
+    clickIdStore: GrowthClickIdStore? = nil,
+    systemContext: GrowthSystemContextProviding = LiveGrowthSystemContextProvider.shared,
+    buildChannelProbes: GrowthBuildChannelProbes?
+  ) {
+    // A non-nil override always wins and skips detection entirely.
+    let channel = configuration.buildChannel
+      ?? buildChannelProbes.map(GrowthBuildChannelDetector.detect)
+      ?? GrowthBuildChannelDetector.current
+    let suppressed = GrowthBuildChannel.isSuppressed(
+      disabled: configuration.disabled,
+      suppressTestBuilds: configuration.suppressTestBuilds,
+      channel: channel
+    )
+    self.resolvedBuildChannel = channel
+    self.isSuppressed = suppressed
     self.configuration = configuration
     self.session = session
     self.deviceIdentifiers = deviceIdentifiers
-    self.clickIdStore = clickIdStore ?? GrowthClickIdStore(defaults: configuration.userDefaults)
+    // Suppressed: a memory-only store (still hydrates existing click ids) so captured click
+    // ids never reach UserDefaults — even when the host injected a persistent store.
+    self.clickIdStore = suppressed
+      ? GrowthClickIdStore(defaults: configuration.userDefaults, persistent: false)
+      : clickIdStore ?? GrowthClickIdStore(defaults: configuration.userDefaults)
     self.systemContext = systemContext
     // Hydrate persisted identity (UserDefaults reads are synchronous).
     self.userId = configuration.userDefaults.string(forKey: StorageKeys.userId)
     self.username = configuration.userDefaults.string(forKey: StorageKeys.username)
     self.email = configuration.userDefaults.string(forKey: StorageKeys.email)
+    if suppressed { Self.logSuppressed(configuration: configuration, channel: channel) }
+  }
+
+  /// One line per instance; never includes the write key.
+  private static func logSuppressed(configuration: GrowthAnalyticsConfiguration, channel: GrowthBuildChannel) {
+    let reason = configuration.disabled ? "disabled" : "channel=\(channel.rawValue)"
+    #if canImport(os)
+    Logger(subsystem: "com.gtmeasy.growth", category: "GrowthAnalytics")
+      .info("GTM Easy: suppressing events (\(reason, privacy: .public))")
+    #else
+    print("GTM Easy: suppressing events (\(reason))")
+    #endif
   }
 
   /// Set the authenticated userId without emitting an identify event. Useful
-  /// for app launches where the user is already signed in. Persisted durably.
+  /// for app launches where the user is already signed in. Persisted durably (memory-only
+  /// when `isSuppressed`).
   public func setUserId(_ id: String?) async {
     self.userId = id
     await persistIdentity()
@@ -152,6 +131,7 @@ public actor GrowthAnalytics {
     email = nil
     let rotatedAnonymousId = UUID().uuidString.lowercased()
     anonymousIdCache = rotatedAnonymousId
+    guard !isSuppressed else { return }
     let defaults = configuration.userDefaults
     await growthPersistOnMainAndWait {
       defaults.removeObject(forKey: StorageKeys.userId)
@@ -164,7 +144,8 @@ public actor GrowthAnalytics {
   public func getAnonymousId() -> String { anonymousId() }
 
   /// Record a click id captured from a deep link or universal link. The
-  /// store dedupes + persists; subsequent events automatically pick it up.
+  /// store dedupes + persists (memory-only when `isSuppressed`); subsequent events
+  /// automatically pick it up.
   public func recordClickId(_ provider: GrowthClickProvider, value: String) async {
     await clickIdStore.record(provider, value: value)
   }
@@ -208,7 +189,8 @@ public actor GrowthAnalytics {
 
   /// Identify the current user. `username` and `email` are first-class (not
   /// smuggled in `traits`). Pass `nil` (the default) to leave a field unchanged;
-  /// use `reset()` to clear identity entirely. All three are persisted durably.
+  /// use `reset()` to clear identity entirely. All three are persisted durably (memory-only
+  /// when `isSuppressed`, which also skips the network call).
   @discardableResult
   public func identify(
     userId: String? = nil,
@@ -216,7 +198,6 @@ public actor GrowthAnalytics {
     email: String? = nil,
     traits: [String: GrowthJSONValue] = [:]
   ) async throws -> GrowthIngestResponse {
-    if configuration.disabled { return GrowthIngestResponse(event: nil, warnings: []) }
     if let userId {
       self.userId = userId
     }
@@ -225,6 +206,11 @@ public actor GrowthAnalytics {
     }
     if let email {
       self.email = Self.normalizeIdentity(email)
+    }
+    if isSuppressed {
+      // Identity stays in memory only; mirror traits without collecting `_ctx`.
+      await mirrorSuppressed(.identify, label: self.userId ?? self.username ?? self.email ?? "<anonymous>", properties: traits)
+      return GrowthIngestResponse(event: nil, warnings: [])
     }
     await persistIdentity()
 
@@ -261,6 +247,7 @@ public actor GrowthAnalytics {
   }
 
   private func persistIdentity() async {
+    guard !isSuppressed else { return }
     let defaults = configuration.userDefaults
     let userId = self.userId, username = self.username, email = self.email
     await growthPersistOnMainAndWait {
@@ -279,7 +266,10 @@ public actor GrowthAnalytics {
     appVersionOverride: String? = nil,
     buildNumberOverride: String? = nil
   ) async throws -> GrowthIngestResponse {
-    if configuration.disabled { return GrowthIngestResponse(event: nil, warnings: []) }
+    if isSuppressed {
+      await mirrorSuppressed(.track, label: eventName, properties: properties)
+      return GrowthIngestResponse(event: nil, warnings: [])
+    }
     var enrichedProperties = properties
     enrichedProperties["_ctx"] = .object(await commonContext())
     let sys = systemContext.current()
@@ -332,7 +322,16 @@ public actor GrowthAnalytics {
     return ctx
   }
 
-  public static let sdkVersion = "0.10.1"
+  /// Debug-sink mirror for a suppressed call. Built from the caller's name + properties only:
+  /// `commonContext()` is skipped because it can persist synthesized click ids (`fbp`).
+  private func mirrorSuppressed(_ kind: GrowthDebugEvent.Kind, label: String, properties: [String: GrowthJSONValue]) async {
+    guard configuration.debug else { return }
+    var marked = properties
+    marked["_suppressed"] = .bool(true)
+    await GrowthDebugSink.shared.record(.init(kind: kind, label: label, properties: marked, suppressed: true))
+  }
+
+  public static let sdkVersion = "0.11.0"
 
   /// The configured environment. Read by `GrowthAutoInstrument` so its install probe can
   /// gate StoreKit checks to production.
@@ -357,7 +356,8 @@ public actor GrowthAnalytics {
     properties: [String: GrowthJSONValue] = [:],
     metadata: [String: GrowthJSONValue] = [:]
   ) async throws -> GrowthSurveyResponse {
-    if configuration.disabled {
+    if isSuppressed {
+      await mirrorSuppressed(.track, label: "survey:\(surveyId)", properties: ["status": .string(status.rawValue)])
       return GrowthSurveyResponse(submissionId: submissionId ?? UUID().uuidString.lowercased(), accepted: 0, warnings: [])
     }
     // Generate the idempotency key on-device so a transparent retry reuses it
@@ -393,57 +393,8 @@ public actor GrowthAnalytics {
   }
 
   @discardableResult
-  public func trackFirstOpen(appVersion: String? = nil, buildNumber: String? = nil) async throws -> GrowthIngestResponse {
-    // Forward the install-time version (resolved by the caller) so the install row feeds the
-    // per-version breakdown. Defaults to the bundle values when omitted.
-    try await track("app.first_open", appVersionOverride: appVersion, buildNumberOverride: buildNumber)
-  }
-
-  @discardableResult
-  public func trackAppOpen() async throws -> GrowthIngestResponse {
-    try await track("app.opened")
-  }
-
-  /// Record that the app was updated (or that the SDK first ran on a pre-existing
-  /// install). This is deliberately NOT an install: the server never counts `app.updated`
-  /// in the install funnel, never alerts on it, and never forwards it to an ad platform.
-  /// `GrowthAutoInstrument` emits this for you — call it directly only for custom lifecycle
-  /// wiring.
-  @discardableResult
-  public func trackAppUpdated(
-    fromVersion: String?,
-    fromBuild: String?,
-    toVersion: String?,
-    toBuild: String?,
-    reason: GrowthUpdateReason,
-    isRealUpdate: Bool
-  ) async throws -> GrowthIngestResponse {
-    var properties: [String: GrowthJSONValue] = [
-      "reason": .string(reason.rawValue),
-      "is_real_update": .bool(isRealUpdate),
-    ]
-    if let fromVersion { properties["from_version"] = .string(fromVersion) }
-    if let fromBuild { properties["from_build"] = .string(fromBuild) }
-    if let toVersion { properties["to_version"] = .string(toVersion) }
-    if let toBuild { properties["to_build"] = .string(toBuild) }
-    // Send the landed version as the top-level appVersion/buildNumber so the server's
-    // per-version breakdown attributes the update to the version it landed on (not Bundle.main,
-    // which can differ when GrowthAutoInstrument uses custom version providers).
-    return try await track("app.updated", properties: properties, appVersionOverride: toVersion, buildNumberOverride: toBuild)
-  }
-
-  @discardableResult
-  public func trackPurchaseCompleted(amount: Double, currency: String, productId: String? = nil) async throws -> GrowthIngestResponse {
-    var properties: [String: GrowthJSONValue] = ["currency": .string(currency)]
-    if let productId {
-      properties["productId"] = .string(productId)
-    }
-    return try await track("purchase.completed", properties: properties, metricValue: amount, metricLabel: currency)
-  }
-
-  @discardableResult
   public func collectAppleSearchAdsAttribution() async throws -> GrowthAttributionResponse? {
-    if configuration.disabled { return nil }
+    if isSuppressed { return nil }
     #if canImport(AdServices) && os(iOS)
     let token = try AAAttribution.attributionToken()
     let sys = systemContext.current()
@@ -493,6 +444,8 @@ public actor GrowthAnalytics {
     }
     let generated = UUID().uuidString.lowercased()
     anonymousIdCache = generated
+    // Suppressed: in-memory only, so a later production build mints and persists its own id.
+    guard !isSuppressed else { return generated }
     let defaults = configuration.userDefaults
     growthPersistOnMain { defaults.set(generated, forKey: key) }
     return generated
@@ -519,65 +472,4 @@ public actor GrowthAnalytics {
   private func iso8601Now() -> String {
     ISO8601DateFormatter().string(from: Date())
   }
-}
-
-public enum GrowthAnalyticsError: Error, Equatable, Sendable {
-  case ingestRejected(statusCode: Int, body: String?)
-}
-
-private struct EventBody: Encodable {
-  let app: String
-  let environment: String
-  let userId: String?
-  let anonymousId: String
-  let deviceId: String?
-  let eventName: String
-  let platform: String
-  let appVersion: String?
-  let buildNumber: String?
-  let source: String
-  let country: String?
-  let locale: String?
-  let timezone: String?
-  let attributionProvider: String?
-  let attributionId: String?
-  let occurredAt: String
-  let properties: [String: GrowthJSONValue]
-  let metricValue: Double?
-  let metricLabel: String?
-}
-
-private struct IdentifyBody: Encodable {
-  let app: String
-  let environment: String
-  let userId: String?
-  let anonymousId: String
-  let deviceId: String?
-  let username: String?
-  let email: String?
-  let platform: String
-  let appVersion: String?
-  let buildNumber: String?
-  let country: String?
-  let locale: String?
-  let timezone: String?
-  let traits: [String: GrowthJSONValue]
-}
-
-private struct AppleAttributionBody: Encodable {
-  let app: String
-  let environment: String
-  let userId: String?
-  let anonymousId: String
-  let deviceId: String?
-  let platform: String
-  let appVersion: String?
-  let buildNumber: String?
-  let source: String
-  let country: String?
-  let locale: String?
-  let timezone: String?
-  let occurredAt: String
-  let properties: [String: GrowthJSONValue]
-  let appleAttributionToken: String
 }

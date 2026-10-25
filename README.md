@@ -4,6 +4,74 @@ First-party Swift Package Manager SDK for GTM Easy growth analytics, native attr
 
 The SDK sends events to the GTM Easy ingestion API, identifies users, persists an anonymous ID, captures the first-party device identifier (IDFV), persists click IDs (fbc/fbp/gclid/wbraid/gbraid/ttclid/msclkid/twclid/igshid), provides paywall + subscription typed helpers, captures flexible onboarding surveys, drives SKAdNetwork 4.0 conversion postbacks, and collects Apple Search Ads attribution. It does not use App Tracking Transparency or the advertising identifier (IDFA), so no `NSUserTrackingUsageDescription` is required.
 
+## What's new (v0.11.0)
+
+- **`suppressTestBuilds`: drop debug / TestFlight / internal-test events.** One flag instead of
+  hand-rolled `#if DEBUG` / `sandboxReceipt` checks. The SDK resolves a `GrowthBuildChannel`
+  (`debug`, `testflight`, `internalTest`, `production`, `unknown`) offline, once per process,
+  and suppresses the instance when the channel is a test build. Default is `false`
+  (non-breaking) — opt in:
+
+```swift
+let analytics = GrowthAnalytics(
+  configuration: .init(
+    app: "<gtm-easy-app-id>",
+    writeKey: "<per-app-write-key>",
+    suppressTestBuilds: true
+  )
+)
+analytics.isSuppressed          // true on simulator / Xcode runs / TestFlight / Ad Hoc
+analytics.resolvedBuildChannel  // e.g. .testflight
+```
+
+Mac TestFlight builds can't be told apart from Mac App Store builds offline, so pass the channel
+yourself (e.g. from a TestFlight-only build configuration flag). A non-nil `buildChannel` always
+wins over detection:
+
+```swift
+#if TESTFLIGHT   // your own Swift flag, set only on the TestFlight configuration
+let channel: GrowthBuildChannel? = .testflight
+#else
+let channel: GrowthBuildChannel? = nil   // auto-detect
+#endif
+
+let analytics = GrowthAnalytics(
+  configuration: .init(
+    app: "<gtm-easy-app-id>",
+    writeKey: "<per-app-write-key>",
+    suppressTestBuilds: true,
+    buildChannel: channel
+  )
+)
+```
+
+Detection (no network, no `AppTransaction`, no App Store prompt):
+
+| Platform | Evidence | Channel |
+|---|---|---|
+| any | simulator | `debug` |
+| iOS / visionOS | `embedded.mobileprovision` with `get-task-allow` | `debug` |
+| iOS / visionOS | profile with `ProvisionsAllDevices` (enterprise) or `ProvisionedDevices` (ad hoc) | `internalTest` |
+| iOS / visionOS | no profile, receipt named `sandboxReceipt` | `testflight` |
+| iOS / visionOS | no profile, App Store receipt present | `production` |
+| macOS / Catalyst | unsigned, ad-hoc, or `get-task-allow` entitlement | `debug` |
+| macOS / Catalyst | `Developer ID Application` certificate, or Mac App Store receipt | `production` |
+| anything else | — | `unknown` |
+
+Rules:
+- `suppressed = disabled || (suppressTestBuilds && channel in {debug, testflight, internalTest})`.
+  `unknown` is **never** suppressed, so a detection miss can't silently drop production data.
+- Suppressed (and plain `disabled`) instances make **no network calls** and write **no durable
+  SDK state**: `GrowthAutoInstrument` skips the install probe and launch classification,
+  `markInstalledBeforeTracking()` is a no-op, `GrowthPurchaseTracker` never baselines or marks
+  transactions sent, and identity / click ids stay in memory. An App Store build that later
+  replaces a TestFlight build on the same device still sends `app.first_open` and every purchase
+  exactly once. (Before v0.11.0, `disabled` still persisted install state — fixed.)
+- An existing anonymous id is reused; otherwise a suppressed instance uses an in-memory one.
+- With `debug: true`, suppressed calls are still mirrored to `GrowthDebugSink` with
+  `GrowthDebugEvent.suppressed == true` and `properties["_suppressed"] = true` (no `_ctx`).
+- One info log line at init: `GTM Easy: suppressing events (channel=debug)`.
+
 ## What's new (v0.10.1)
 
 - **macOS hardware model.** On macOS `_ctx.device_model` now carries

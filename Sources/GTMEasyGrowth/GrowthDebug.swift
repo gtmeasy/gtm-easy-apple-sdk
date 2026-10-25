@@ -21,7 +21,7 @@ public actor GrowthDebugSink {
       userInfo: ["event": event]
     )
     #if DEBUG
-    print("[GrowthAnalytics] \(event.kind) \(event.label) \(event.properties)")
+    print("[GrowthAnalytics] \(event.kind) \(event.label)\(event.suppressed ? " (suppressed)" : "") \(event.properties)")
     #endif
   }
 
@@ -45,11 +45,16 @@ public struct GrowthDebugEvent: Sendable {
   public let label: String
   public let properties: [String: GrowthJSONValue]
   public let occurredAt: Date
+  /// True when the SDK did NOT send this event because the instance is suppressed
+  /// (`disabled`, or `suppressTestBuilds` on a test build). Shows what *would* be sent.
+  /// Suppressed events also carry `properties["_suppressed"] = true` and no `_ctx`.
+  public let suppressed: Bool
 
-  public init(kind: Kind, label: String, properties: [String: GrowthJSONValue], occurredAt: Date = Date()) {
+  public init(kind: Kind, label: String, properties: [String: GrowthJSONValue], occurredAt: Date = Date(), suppressed: Bool = false) {
     self.kind = kind
     self.label = label
     self.properties = properties
     self.occurredAt = occurredAt
+    self.suppressed = suppressed
   }
 }

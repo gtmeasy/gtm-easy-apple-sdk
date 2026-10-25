@@ -9,6 +9,9 @@ public actor GrowthClickIdStore {
   public static let shared = GrowthClickIdStore()
 
   private let defaults: UserDefaults
+  /// False for suppressed `GrowthAnalytics` instances: reads still hydrate from `defaults`,
+  /// writes stay in memory.
+  private let persistent: Bool
   private let prefix = "gtm_easy_growth_click_id_"
   // In-memory mirror of persisted click-id payloads. Persistence is marshalled to the main
   // thread (see growthPersistOnMain), so reads consult this mirror to stay correct within a
@@ -21,7 +24,12 @@ public actor GrowthClickIdStore {
   public static let defaultTTL: TimeInterval = 60 * 60 * 24 * 90
 
   public init(defaults: UserDefaults = .standard) {
+    self.init(defaults: defaults, persistent: true)
+  }
+
+  init(defaults: UserDefaults, persistent: Bool) {
     self.defaults = defaults
+    self.persistent = persistent
   }
 
   /// Records a click id for a provider. Skip-stores empty strings.
@@ -35,6 +43,7 @@ public actor GrowthClickIdStore {
     let storageKey = key(provider)
     memory[storageKey] = payload
     hydrated.insert(storageKey)
+    guard persistent else { return }
     growthPersistOnMain { [defaults] in defaults.set(payload, forKey: storageKey) }
   }
 
@@ -52,6 +61,7 @@ public actor GrowthClickIdStore {
     let storageKey = key(provider)
     memory[storageKey] = nil
     hydrated.insert(storageKey)
+    guard persistent else { return }
     growthPersistOnMain { [defaults] in defaults.removeObject(forKey: storageKey) }
   }
 

@@ -18,11 +18,16 @@ import StoreKit
 /// sale is permanently suppressed and its refund is never sent either. Prefer
 /// toggling consent through `isEnabled` over `stop()`/`start()`; use `stop()`
 /// only to cancel the `Transaction.updates` listener.
+///
+/// When `analytics.isSuppressed` every entry point returns before baselining, ledger
+/// reservation or consent bookkeeping, so a later production build still sends each
+/// transaction exactly once.
 @available(iOS 15.0, macOS 12.0, tvOS 15.0, watchOS 8.0, *)
 public actor GrowthPurchaseTracker {
   private let analytics: GrowthAnalytics
   private let ledger: GrowthPurchaseLedger
   private let isEnabled: @Sendable (GrowthPurchaseRecord) async -> Bool
+  private let allRecords: @Sendable () async -> [GrowthPurchaseRecord]
   private let startedAt: Date
   private var updatesTask: Task<Void, Never>?
   private var startTask: Task<Void, Never>?
@@ -33,9 +38,20 @@ public actor GrowthPurchaseTracker {
     defaults: UserDefaults = .standard,
     isEnabled: @escaping @Sendable (GrowthPurchaseRecord) async -> Bool = { _ in true }
   ) {
+    self.init(analytics: analytics, defaults: defaults, isEnabled: isEnabled, allRecords: { await Self.storeKitRecords() })
+  }
+
+  /// Test seam: `allRecords` replaces the StoreKit `Transaction.all` scan.
+  init(
+    analytics: GrowthAnalytics,
+    defaults: UserDefaults,
+    isEnabled: @escaping @Sendable (GrowthPurchaseRecord) async -> Bool,
+    allRecords: @escaping @Sendable () async -> [GrowthPurchaseRecord]
+  ) {
     self.analytics = analytics
     self.ledger = GrowthPurchaseLedger(defaults: defaults)
     self.isEnabled = isEnabled
+    self.allRecords = allRecords
     self.startedAt = Date()
   }
 
@@ -50,6 +66,8 @@ public actor GrowthPurchaseTracker {
   /// Baselines on first run, starts the `Transaction.updates` listener, then
   /// runs one `sync()`. Overlapping calls share one listener and one baseline.
   public func start() async {
+    // Suppressed: no baseline, no listener, no ledger writes.
+    guard !analytics.isSuppressed else { return }
     stopped = false
     if let task = startTask {
       await task.value
@@ -75,7 +93,8 @@ public actor GrowthPurchaseTracker {
   /// launch, on foreground, and after any purchase/restore (including purchases
   /// made by another SDK such as RevenueCat).
   public func sync() async {
-    let records = await Self.allRecords()
+    guard !analytics.isSuppressed else { return }
+    let records = await allRecords()
     guard await ensureBaselined(with: records) else { return }
     await processRecords(records)
   }
@@ -83,7 +102,8 @@ public actor GrowthPurchaseTracker {
   /// Report one verified transaction immediately (e.g. the value returned by
   /// `Product.purchase()`). Unverified results are ignored.
   public func track(_ transaction: Transaction) async {
-    guard await ensureBaselined(with: await Self.allRecords()) else { return }
+    guard !analytics.isSuppressed else { return }
+    guard await ensureBaselined(with: await allRecords()) else { return }
     await processRecords([Self.record(from: transaction)])
   }
 
@@ -111,7 +131,7 @@ public actor GrowthPurchaseTracker {
   }
 
   private func performStart() async {
-    let records = await Self.allRecords()
+    let records = await allRecords()
     await ledger.baseline(with: records, cutoff: startedAt)
     if updatesTask == nil, !stopped {
       updatesTask = Task { [weak self] in
@@ -127,7 +147,8 @@ public actor GrowthPurchaseTracker {
   private func shouldContinueProcessing() -> Bool { !stopped }
 
   private func processRecords(_ records: [GrowthPurchaseRecord]) async {
-    guard !stopped else { return }
+    // A suppressed `track` is a successful noop, which would otherwise `markSent` here.
+    guard !stopped, !analytics.isSuppressed else { return }
     let actions = await ledger.pending(records)
     guard !stopped else {
       for action in actions {
@@ -153,7 +174,7 @@ public actor GrowthPurchaseTracker {
 
   // MARK: - StoreKit mapping
 
-  private static func allRecords() async -> [GrowthPurchaseRecord] {
+  private static func storeKitRecords() async -> [GrowthPurchaseRecord] {
     var records: [GrowthPurchaseRecord] = []
     for await result in Transaction.all {
       guard case .verified(let transaction) = result else { continue }

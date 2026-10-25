@@ -34,28 +34,6 @@ Host apps must hold a single `GrowthAnalytics` instance for the process — neve
 import Foundation
 import GTMEasyGrowth
 
-/// Helper to determine the build and distribution environment
-enum EnvHelper {
-  /// True if running in a Debug configuration (local development)
-  static var isDebug: Bool {
-    #if DEBUG
-    return true
-    #else
-    return false
-    #endif
-  }
-
-  /// True if running in the sandbox environment (TestFlight or App Store sandbox testing)
-  static var isTestFlight: Bool {
-    Bundle.main.appStoreReceiptURL?.lastPathComponent == "sandboxReceipt"
-  }
-
-  /// True if running in a Debug or TestFlight sandbox environment
-  static var isDebugOrTestFlight: Bool {
-    isDebug || isTestFlight
-  }
-}
-
 enum GrowthClient {
   static let analytics: GrowthAnalytics = {
     let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
@@ -65,8 +43,9 @@ enum GrowthClient {
         app: "<gtm-easy-app-id>",          // from gtmeasy.com → Settings
         writeKey: "<per-app-write-key>",   // public SDK key, safe to ship
         environment: .production,          // .staging for QA
-        // Disable tracking during debug/local QA and TestFlight sandbox environments by default
-        disabled: EnvHelper.isDebugOrTestFlight || isPreview
+        disabled: isPreview,
+        // v0.11.0+: drop simulator / Xcode / TestFlight / Ad Hoc builds automatically.
+        suppressTestBuilds: true
       )
     )
   }()
@@ -74,6 +53,37 @@ enum GrowthClient {
   static let autoInstrument = GrowthAutoInstrument(analytics: analytics)
 }
 ```
+
+### Test builds: `suppressTestBuilds` (v0.11.0)
+
+The SDK resolves `GrowthAnalytics.resolvedBuildChannel` offline, once per process
+(`debug` / `testflight` / `internalTest` / `production` / `unknown`) and sets
+`isSuppressed = disabled || (suppressTestBuilds && channel is debug, testflight or internalTest)`.
+`unknown` is never suppressed. Suppressed instances send nothing and persist nothing (no install
+state, purchase ledger, identity or click ids), so the App Store build that later replaces a
+TestFlight build on the same device still sends `app.first_open` and purchases once. With
+`debug: true` suppressed calls are mirrored to `GrowthDebugSink` with `suppressed == true`.
+
+Detection: simulator → debug; iOS `embedded.mobileprovision` (`get-task-allow` → debug,
+`ProvisionsAllDevices` / `ProvisionedDevices` → internalTest); `sandboxReceipt` → testflight;
+App Store receipt → production; macOS unsigned / ad-hoc / `get-task-allow` → debug,
+Developer ID or Mac App Store receipt → production.
+
+**Mac TestFlight is not detectable offline** (it looks like a Mac App Store build). Pass the channel
+from a build-configuration flag — a non-nil `buildChannel` always wins:
+
+```swift
+#if TESTFLIGHT
+let channel: GrowthBuildChannel? = .testflight
+#else
+let channel: GrowthBuildChannel? = nil        // auto-detect
+#endif
+// ...
+.init(app: "...", writeKey: "...", suppressTestBuilds: true, buildChannel: channel)
+```
+
+Replace hand-rolled `EnvHelper.isDebugOrTestFlight` / `sandboxReceipt` checks passed to `disabled`
+with `suppressTestBuilds: true` when upgrading.
 
 `endpoint` defaults to `https://www.gtmeasy.com`. Override only for self-hosted GTM Easy or LAN dev.
 
@@ -229,7 +239,7 @@ Attach free-form `metadata: [String: GrowthJSONValue]` to the whole submission (
 - **Don't add ATT/IDFA back in.** The SDK intentionally does not touch AppTrackingTransparency or the advertising identifier; it uses only the first-party IDFV.
 - **Don't hash email/phone before passing to `identify`.** The server hashes; double-hashing breaks Enhanced Matching.
 - **Don't add `GTMEasyGrowthAPI` to the app target** unless you have a concrete reason to bypass `GrowthAnalytics`.
-- **Don't add `#if DEBUG` guards around analytics calls.** Set `disabled` dynamically using `EnvHelper.isDebugOrTestFlight` in the configuration wrapper instead — all methods still return valid responses and call sites stay clean.
+- **Don't add `#if DEBUG` guards around analytics calls, and don't compute "is this a test build" yourself.** Set `suppressTestBuilds: true` (plus `buildChannel` for Mac TestFlight) in the configuration wrapper — all methods still return valid responses, call sites stay clean, and nothing is persisted that would hide the later production install. `#if DEBUG` inside the SDK package doesn't reflect the host app's configuration anyway.
 
 ## 11. Verifying the wire-up
 
